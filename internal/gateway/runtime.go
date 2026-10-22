@@ -409,6 +409,7 @@ type ProxyProbeResult struct {
 	Status   int    `json:"status"`
 	Duration int64  `json:"duration_ms"`
 	Error    string `json:"error,omitempty"`
+	Detail   string `json:"detail,omitempty"`
 	Timeout  bool   `json:"timeout"`
 }
 

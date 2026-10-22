@@ -3,7 +3,9 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,20 +45,24 @@ func (g *Gateway) ProbeProxies(ctx context.Context, timeout time.Duration, index
 				channels = []string{"anonymous", "zen", "go"}
 			}
 			var last probeResult
+			var issues []string
 			for _, candidate := range channels {
 				base, key, tier, channelErr := g.probeCredential(index, candidate)
 				if channelErr != nil {
-					last = probeResult{reason: channelErr.Error()}
+					issues = append(issues, candidate+": "+channelErr.Error())
 					continue
 				}
 				model, client, protocol, modelErr := g.probeModel(proxy, base, tier, candidate == "anonymous")
 				if modelErr != nil {
-					last = probeResult{reason: modelErr.Error()}
+					issues = append(issues, candidate+": "+modelErr.Error())
 					continue
 				}
 				result.Model = model
 				result.Channel = candidate
 				last = g.probeAttempt(probeCtx, client, base, key, model, protocol, identity.RequestIDs{Project: "opencode2api:proxy-health"}, "")
+				if !last.success {
+					issues = append(issues, fmt.Sprintf("%s: %s", candidate, probeFailure(last)))
+				}
 				if last.success {
 					break
 				}
@@ -65,13 +71,29 @@ func (g *Gateway) ProbeProxies(ctx context.Context, timeout time.Duration, index
 			result.Duration = time.Since(started).Milliseconds()
 			if !last.success {
 				result.Error = last.reason
+				result.Detail = strings.Join(issues, "; ")
 				result.Timeout = last.reason == "probe_timeout"
+			} else if len(issues) > 0 {
+				result.Detail = strings.Join(issues, "; ")
 			}
 			results[resultIndex] = result
 		}(resultIndex, index, proxy)
 	}
 	wg.Wait()
 	return results
+}
+
+func probeFailure(result probeResult) string {
+	if result.status != 0 {
+		if result.detail != "" {
+			return fmt.Sprintf("HTTP %d: %s", result.status, result.detail)
+		}
+		return fmt.Sprintf("HTTP %d", result.status)
+	}
+	if result.detail != "" {
+		return result.detail
+	}
+	return result.reason
 }
 
 func (g *Gateway) probeCredential(proxyIndex int, channel string) (string, string, config.Tier, error) {
@@ -99,9 +121,6 @@ func (g *Gateway) probeCredential(proxyIndex int, channel string) (string, strin
 func (g *Gateway) probeModel(proxy *proxyTransport, base string, tier config.Tier, anonymous bool) (string, *http.Client, wire.Protocol, error) {
 	for _, model := range g.catalog.List() {
 		if !g.catalog.IsFreeModel(model) {
-			continue
-		}
-		if _, err := g.catalog.RouteForTier(model, tier, tier == config.TierZen && len(g.cfg.ZenKeys) > 0, tier == config.TierGo && len(g.cfg.GoKeys) > 0); err != nil {
 			continue
 		}
 		var route models.Route

@@ -53,7 +53,7 @@ function renderProbeResults(results) {
       $("#proxy-select-all").checked = false;
       syncProbeControls();
     });
-    const status = result.status ? String(result.status) : "—";
+    const status = result.status ? String(result.status) : result.error ? t("无 HTTP 响应", "config.proxy.noHttpResponse") : "—";
     const issue = result.timeout ? t("超时", "config.proxy.timeout") : result.error ? t("连接失败", "config.proxy.connectError") : statusOk ? t("可达", "config.proxy.reachable") : t("HTTP 响应", "config.proxy.httpResponse");
     const tone = statusOk && !result.error ? "ok" : result.timeout || result.error || result.status === 403 || result.status === 429 ? "bad" : "warn";
     const row = el("tr", {}, [
@@ -63,7 +63,7 @@ function renderProbeResults(results) {
       el("td", { class: "mono", text: result.model || "—" }),
       el("td", { class: `num ${tone}`, text: status }),
       el("td", { class: "num", text: `${result.duration_ms} ms` }),
-      el("td", { class: tone, text: result.error ? `${issue} (${result.timeout ? t("超时", "config.proxy.timeout") : t("代理请求失败", "config.proxy.requestError")})` : issue }),
+      el("td", { class: tone, title: result.detail || "", text: result.error ? `${issue} (${result.error}${result.detail ? `: ${result.detail}` : ""})` : issue }),
     ]);
     body.append(row);
   }

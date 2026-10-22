@@ -23,6 +23,7 @@ import (
 type probeResult struct {
 	success, attempted, effortRejected bool
 	reason, channel                    string
+	detail                             string
 	status                             int
 	effort                             models.EffortProbe
 }
@@ -210,8 +211,10 @@ func (g *Gateway) probeAttempt(parent context.Context, client *http.Client, base
 	resp, err := client.Do(req)
 	if err != nil {
 		result.reason = "transport_error"
+		result.detail = err.Error()
 		if ctx.Err() != nil {
 			result.reason = "probe_timeout"
+			result.detail = ctx.Err().Error()
 		}
 		return result
 	}
@@ -225,8 +228,11 @@ func (g *Gateway) probeAttempt(parent context.Context, client *http.Client, base
 			// its own reason so operators see it in the WebUI instead of
 			// reading another anonymous "http_403".
 			if isNetworkAbuseBlock(resp.StatusCode, body) {
-				return probeResult{attempted: true, reason: "network_abuse_blocked"}
+				result.reason = "network_abuse_blocked"
+				result.detail = strings.TrimSpace(string(body))
+				return result
 			}
+			result.detail = strings.TrimSpace(string(body))
 			result.effortRejected = isEffortRejection(resp.StatusCode, string(body))
 			if isModelUnavailable(resp.StatusCode, string(body)) {
 				result.reason = "model_unavailable"
@@ -269,6 +275,7 @@ func (g *Gateway) probeAttempt(parent context.Context, client *http.Client, base
 	if !result.success {
 		result.reason = "invalid_or_incomplete_response"
 		if err != nil {
+			result.detail = err.Error()
 			result.effortRejected = isEffortRejection(400, err.Error())
 			if isModelUnavailable(400, err.Error()) {
 				result.reason = "model_unavailable"
