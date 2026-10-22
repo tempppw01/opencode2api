@@ -59,7 +59,11 @@ func (g *Gateway) ProbeProxies(ctx context.Context, timeout time.Duration, index
 				}
 				result.Model = model
 				result.Channel = candidate
-				last = g.probeAttempt(probeCtx, client, base, key, model, protocol, identity.RequestIDs{Project: "opencode2api:proxy-health"}, "")
+				ids := identity.RequestIDs{
+					Session: identity.CanonicalSessionID(fmt.Sprintf("proxy-health:%d:%s", index, model)),
+					Project: "opencode2api:default-project",
+				}
+				last = g.probeAttempt(probeCtx, client, base, key, model, protocol, ids, "")
 				attempted = last.attempted
 				if !last.success {
 					issues = append(issues, fmt.Sprintf("%s: %s", candidate, probeFailure(last)))
