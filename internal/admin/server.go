@@ -91,6 +91,7 @@ func (a *Server) staticHandler() http.Handler {
 	assets := webui.Assets
 	files := http.FileServer(http.FS(assets))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			writeAdminError(w, http.StatusNotFound, "not_found", "management endpoint not found")
 			return

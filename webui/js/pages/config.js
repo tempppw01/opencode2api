@@ -165,6 +165,7 @@ async function importProxyFile(file) {
     }
     const result = await api("/api/proxies/import", { method: "POST", body: JSON.stringify({ proxies: imported }) });
     store.set("config", result.config);
+    $("#proxies-new").value = "";
     toast(t(`已合并 ${result.added} 个节点到 Proxy File，跳过无效行 ${skipped} 行`, "config.proxy.imported", result.added, skipped));
   } catch (error) {
     toast(error.message || t("读取文件失败", "config.proxy.importError"), true);
