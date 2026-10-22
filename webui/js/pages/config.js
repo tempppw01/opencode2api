@@ -1,5 +1,5 @@
 // Page: 配置中心 — masked config editing with validation, hot reload and reveal.
-import { api, apiStream } from "../api.js";
+import { api } from "../api.js";
 import { loadConfig, loadDebugModels } from "../data.js";
 import * as store from "../store.js";
 import { t, onChange } from "../i18n.js";
@@ -39,7 +39,7 @@ function renderProbeResults(results) {
   const body = $("#proxy-probe-results");
   body.replaceChildren();
   if (!probeResults.length) {
-    body.append(el("tr", {}, el("td", { class: "empty", colspan: 5, text: t("没有代理节点", "config.proxy.none") })));
+    body.append(el("tr", {}, el("td", { class: "empty", colspan: 6, text: t("没有代理节点", "config.proxy.none") })));
     $("#proxy-probe-summary").textContent = t("没有可检测的代理节点", "config.proxy.none");
     syncProbeControls();
     return;
@@ -59,6 +59,7 @@ function renderProbeResults(results) {
     const row = el("tr", {}, [
       el("td", {}, checkbox),
       el("td", { class: "mono", text: result.address }),
+      el("td", { text: result.channel || "—" }),
       el("td", { class: `num ${tone}`, text: status }),
       el("td", { class: "num", text: `${result.duration_ms} ms` }),
       el("td", { class: tone, text: result.error ? `${issue} (${result.timeout ? t("超时", "config.proxy.timeout") : t("代理请求失败", "config.proxy.requestError")})` : issue }),
@@ -74,10 +75,11 @@ function renderProbeResults(results) {
 
 async function probeProxies() {
   const button = $("#proxy-probe");
-  const previous = new Map();
+  const config = store.get("config") || {};
+  const total = (config.proxies?.length || 0) + Number(config.proxyfile_count || 0);
   let completed = 0;
-  let ended = false;
   let failed = false;
+  let hasResults = false;
   button.disabled = true;
   button.classList.add("is-loading");
   button.setAttribute("aria-busy", "true");
@@ -85,21 +87,26 @@ async function probeProxies() {
   $("#proxy-probe-summary").textContent = button.textContent;
   await new Promise((resolve) => requestAnimationFrame(resolve));
   try {
-    await apiStream("/api/proxies/probe", { method: "POST", body: JSON.stringify({ indexes: [] }) }, (message) => {
-      if (message.type === "started") {
-        $("#proxy-probe-summary").textContent = t("测活请求已送达，等待节点结果…", "config.proxy.probeStarted");
-      } else if (message.type === "result") {
-        previous.set(message.result.index, message.result);
-        completed++;
-        renderProbeResults([...previous.values()].sort((a, b) => a.index - b.index));
-        button.textContent = `${t("检测中…", "config.proxy.probing")} ${completed}`;
+    if (!total) {
+      const result = await api("/api/proxies/probe", { method: "POST", body: JSON.stringify({ indexes: [] }) });
+      renderProbeResults(result.results || []);
+      hasResults = true;
+    } else {
+      const batchSize = 8;
+      const byIndex = new Map();
+      for (let start = 0; start < total; start += batchSize) {
+        const indexes = Array.from({ length: Math.min(batchSize, total - start) }, (_, offset) => start + offset);
+        const result = await api("/api/proxies/probe", { method: "POST", body: JSON.stringify({ indexes }) });
+        for (const item of result.results || []) byIndex.set(item.index, item);
+        completed = Math.min(start + indexes.length, total);
+        renderProbeResults([...byIndex.values()].sort((a, b) => a.index - b.index));
+        hasResults = true;
+        button.textContent = `${t("检测中…", "config.proxy.probing")} ${completed}/${total}`;
         $("#proxy-probe-summary").textContent = button.textContent;
-      } else if (message.type === "done") {
-        ended = true;
-        if (!completed) renderProbeResults([]);
       }
-    });
-    if (!ended) throw new Error(t("测活连接提前断开，已显示部分结果", "config.proxy.probeInterrupted"));
+      ended = true;
+      ended = true;
+    }
   } catch (error) {
     failed = true;
     $("#proxy-probe-summary").textContent = `${t("测活失败", "config.proxy.probeFailed")}: ${error.message}`;
@@ -109,7 +116,7 @@ async function probeProxies() {
     button.classList.remove("is-loading");
     button.removeAttribute("aria-busy");
     button.textContent = t("一键测活", "config.proxy.probe");
-    if (failed && completed > 0) $("#proxy-probe-summary").textContent = `${t("检测已中断，已显示部分结果", "config.proxy.probeInterrupted")} (${completed})`;
+    if (failed && hasResults) $("#proxy-probe-summary").textContent = `${t("检测已中断，已显示部分结果", "config.proxy.probeInterrupted")} (${completed})`;
     syncProbeControls();
   }
 }

@@ -9,10 +9,10 @@ import (
 	"opencode2api/internal/models"
 )
 
-// ProbeProxies checks every route independently using the regular HTTP client.
-// It checks the free model catalog endpoint, reports its HTTP status even
-// when it is 403/429, and does not change automatic proxy health.
-func (g *Gateway) ProbeProxies(parent context.Context, timeout time.Duration, indexes []int, onResult func(ProxyProbeResult)) []ProxyProbeResult {
+// ProbeProxies makes one real upstream models request through each selected
+// proxy. This intentionally observes upstream 403/429 responses and can use
+// the upstream IP quota, just like a normal gateway request.
+func (g *Gateway) ProbeProxies(ctx context.Context, timeout time.Duration, indexes []int) []ProxyProbeResult {
 	if len(indexes) == 0 {
 		indexes = make([]int, len(g.transports.items))
 		for i := range indexes {
@@ -20,51 +20,51 @@ func (g *Gateway) ProbeProxies(parent context.Context, timeout time.Duration, in
 		}
 	}
 	results := make([]ProxyProbeResult, len(indexes))
-	semaphore := make(chan struct{}, 16)
 	var wg sync.WaitGroup
-	var resultMu sync.Mutex
-	storeResult := func(resultIndex int, result ProxyProbeResult) {
-		resultMu.Lock()
-		results[resultIndex] = result
-		resultMu.Unlock()
-		if onResult != nil {
-			onResult(result)
-		}
-	}
-	for resultIndex, i := range indexes {
-		if i < 0 || i >= len(g.transports.items) {
-			results[resultIndex] = ProxyProbeResult{Index: i, Error: "invalid proxy index"}
+	for resultIndex, index := range indexes {
+		if index < 0 || index >= len(g.transports.items) {
+			results[resultIndex] = ProxyProbeResult{Index: index, Error: "invalid proxy index"}
 			continue
 		}
-		proxy := g.transports.items[i]
+		proxy := g.transports.items[index]
 		wg.Add(1)
-		go func(resultIndex, i int, proxy *proxyTransport) {
+		go func(resultIndex, index int, proxy *proxyTransport) {
 			defer wg.Done()
-			select {
-			case semaphore <- struct{}{}:
-				defer func() { <-semaphore }()
-			case <-parent.Done():
-				storeResult(resultIndex, ProxyProbeResult{Index: i, Address: config.RedactURL(proxy.name), Error: "probe canceled", Timeout: parent.Err() == context.DeadlineExceeded})
-				return
-			}
-			result := ProxyProbeResult{Index: i, Address: config.RedactURL(proxy.name)}
+			result := ProxyProbeResult{Index: index, Address: config.RedactURL(proxy.name)}
 			started := time.Now()
-			ctx, cancel := context.WithTimeout(parent, timeout)
+			probeCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
-			base := g.cfg.Upstream.Anonymous
-			if base == "" {
-				base = models.V1Base
-			}
-			_, status, err := models.FetchModels(ctx, proxy.client, base, anonymousZenKey)
+			base, key, channel := g.probeCredential(index)
+			result.Channel = channel
+			_, status, err := models.FetchModels(probeCtx, proxy.client, base, key)
 			result.Status = status
 			result.Duration = time.Since(started).Milliseconds()
 			if err != nil {
-				result.Error = "proxy request failed"
-				result.Timeout = ctx.Err() == context.DeadlineExceeded
+				result.Error = "upstream request failed"
+				result.Timeout = probeCtx.Err() == context.DeadlineExceeded
 			}
-			storeResult(resultIndex, result)
-		}(resultIndex, i, proxy)
+			results[resultIndex] = result
+		}(resultIndex, index, proxy)
 	}
 	wg.Wait()
 	return results
+}
+
+func (g *Gateway) probeCredential(proxyIndex int) (string, string, string) {
+	if g.cfg.Prefer == config.TierGo && len(g.cfg.GoKeys) > 0 {
+		return g.cfg.Upstream.Go, g.cfg.GoKeys[proxyIndex%len(g.cfg.GoKeys)], "go/key"
+	}
+	if g.cfg.Prefer != config.TierGo && len(g.cfg.ZenKeys) > 0 {
+		return g.cfg.Upstream.Zen, g.cfg.ZenKeys[proxyIndex%len(g.cfg.ZenKeys)], "zen/key"
+	}
+	if g.cfg.Anonymous {
+		return g.cfg.Upstream.Anonymous, anonymousZenKey, "anonymous"
+	}
+	if len(g.cfg.ZenKeys) > 0 {
+		return g.cfg.Upstream.Zen, g.cfg.ZenKeys[proxyIndex%len(g.cfg.ZenKeys)], "zen/key"
+	}
+	if len(g.cfg.GoKeys) > 0 {
+		return g.cfg.Upstream.Go, g.cfg.GoKeys[proxyIndex%len(g.cfg.GoKeys)], "go/key"
+	}
+	return g.cfg.Upstream.Anonymous, anonymousZenKey, "anonymous"
 }

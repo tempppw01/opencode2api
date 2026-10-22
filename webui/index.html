@@ -844,7 +844,7 @@
                   <div class="section-head">
                     <div>
                       <h2 class="section-title" data-i18n="config.proxy.title">Proxy 节点</h2>
-                      <p class="section-caption" data-i18n="config.proxy.caption">逐个检测代理通路，并按检测结果批量清理节点。</p>
+                      <p class="section-caption" data-i18n="config.proxy.caption">通过配置的上游渠道逐个请求模型目录，可能触发上游限流或消耗出口 IP 额度。</p>
                     </div>
                   </div>
                   <div class="proxy-tools">
@@ -859,8 +859,8 @@
                     <div id="proxy-probe-summary" class="proxy-probe-summary" role="status"></div>
                     <div class="table-wrap">
                       <table class="table proxy-probe-table">
-                        <thead><tr><th></th><th data-i18n="config.proxy.col.node">节点</th><th data-i18n="config.proxy.col.status">状态码</th><th data-i18n="config.proxy.col.latency">耗时</th><th data-i18n="config.proxy.col.result">检测结果</th></tr></thead>
-                        <tbody id="proxy-probe-results"><tr><td class="empty" colspan="5" data-i18n="config.proxy.probeEmpty">运行测活后显示结果</td></tr></tbody>
+                        <thead><tr><th></th><th data-i18n="config.proxy.col.node">节点</th><th data-i18n="config.proxy.col.channel">渠道</th><th data-i18n="config.proxy.col.status">状态码</th><th data-i18n="config.proxy.col.latency">耗时</th><th data-i18n="config.proxy.col.result">检测结果</th></tr></thead>
+                        <tbody id="proxy-probe-results"><tr><td class="empty" colspan="6" data-i18n="config.proxy.probeEmpty">运行测活后显示结果</td></tr></tbody>
                       </table>
                     </div>
                   </div>

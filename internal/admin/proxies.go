@@ -2,13 +2,11 @@ package admin
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"opencode2api/internal/config"
@@ -24,30 +22,10 @@ func (a *Server) handleProbeProxies(w http.ResponseWriter, r *http.Request) {
 		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	ctx, cancel := context.WithCancel(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	w.Header().Set("Content-Type", "application/x-ndjson")
-	w.Header().Set("Cache-Control", "no-cache, no-transform")
-	w.Header().Set("X-Accel-Buffering", "no")
-	flusher, canFlush := w.(http.Flusher)
-	encoder := json.NewEncoder(w)
-	var writeMu sync.Mutex
-	write := func(value any) {
-		writeMu.Lock()
-		defer writeMu.Unlock()
-		if err := encoder.Encode(value); err != nil {
-			cancel()
-			return
-		}
-		if canFlush {
-			flusher.Flush()
-		}
-	}
-	write(map[string]any{"type": "started"})
-	results := a.manager.ProbeProxies(ctx, 12*time.Second, input.Indexes, func(result gateway.ProxyProbeResult) {
-		write(map[string]any{"type": "result", "result": result})
-	})
-	write(map[string]any{"type": "done", "count": len(results)})
+	results := a.manager.ProbeProxies(ctx, 12*time.Second, input.Indexes)
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"results": results})
 }
 
 type deleteProxyInput struct {
