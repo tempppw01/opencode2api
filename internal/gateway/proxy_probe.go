@@ -11,7 +11,6 @@ import (
 
 	"opencode2api/internal/config"
 	"opencode2api/internal/identity"
-	"opencode2api/internal/models"
 	wire "opencode2api/internal/protocol"
 )
 
@@ -46,13 +45,14 @@ func (g *Gateway) ProbeProxies(ctx context.Context, timeout time.Duration, index
 			}
 			var last probeResult
 			var issues []string
+			attempted := false
 			for _, candidate := range channels {
 				base, key, tier, channelErr := g.probeCredential(index, candidate)
 				if channelErr != nil {
 					issues = append(issues, candidate+": "+channelErr.Error())
 					continue
 				}
-				model, client, protocol, modelErr := g.probeModel(proxy, base, tier, candidate == "anonymous")
+				model, client, protocol, modelErr := g.probeModel(proxy, base, tier)
 				if modelErr != nil {
 					issues = append(issues, candidate+": "+modelErr.Error())
 					continue
@@ -60,12 +60,17 @@ func (g *Gateway) ProbeProxies(ctx context.Context, timeout time.Duration, index
 				result.Model = model
 				result.Channel = candidate
 				last = g.probeAttempt(probeCtx, client, base, key, model, protocol, identity.RequestIDs{Project: "opencode2api:proxy-health"}, "")
+				attempted = last.attempted
 				if !last.success {
 					issues = append(issues, fmt.Sprintf("%s: %s", candidate, probeFailure(last)))
 				}
 				if last.success {
 					break
 				}
+			}
+			if !attempted && len(issues) > 0 {
+				last.reason = "probe_not_sent"
+				last.detail = strings.Join(issues, "; ")
 			}
 			result.Status = last.status
 			result.Duration = time.Since(started).Milliseconds()
@@ -118,22 +123,15 @@ func (g *Gateway) probeCredential(proxyIndex int, channel string) (string, strin
 	}
 }
 
-func (g *Gateway) probeModel(proxy *proxyTransport, base string, tier config.Tier, anonymous bool) (string, *http.Client, wire.Protocol, error) {
+func (g *Gateway) probeModel(proxy *proxyTransport, base string, tier config.Tier) (string, *http.Client, wire.Protocol, error) {
 	for _, model := range g.catalog.List() {
 		if !g.catalog.IsFreeModel(model) {
 			continue
 		}
-		var route models.Route
-		var err error
-		if anonymous {
-			route, err = g.catalog.Route(model, len(g.cfg.ZenKeys) > 0, len(g.cfg.GoKeys) > 0, true)
-		} else {
-			route, err = g.catalog.RouteForTier(model, tier, tier == config.TierZen && len(g.cfg.ZenKeys) > 0, tier == config.TierGo && len(g.cfg.GoKeys) > 0)
+		protocol := g.catalog.Diagnostic(model, wire.Chat, len(g.cfg.ZenKeys) > 0, len(g.cfg.GoKeys) > 0, g.cfg.Anonymous).NativeProtocols[tier]
+		if protocol == "" {
+			protocol = wire.Chat
 		}
-		if err != nil {
-			continue
-		}
-		protocol := route.ProtocolFor(tier)
 		return model, g.inferenceClient(proxy, base, model), protocol, nil
 	}
 	return "", nil, "", errors.New("no free model is available on selected channel")
