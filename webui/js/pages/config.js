@@ -74,28 +74,39 @@ function renderProbeResults(results) {
 
 async function probeProxies() {
   const button = $("#proxy-probe");
-  const total = (store.get("config")?.proxies?.length || 0) + (store.get("config")?.proxyfile ? Number(store.get("config")?.proxyfile_count || 0) : 0);
+  const config = store.get("config") || {};
+  const proxyFileCountKnown = !config.proxyfile || Number.isFinite(Number(config.proxyfile_count));
+  const total = (config.proxies?.length || 0) + (config.proxyfile ? Number(config.proxyfile_count || 0) : 0);
   const previous = new Map(probeResults.map((item) => [item.index, item]));
-  const indexes = Array.from({ length: total }, (_, index) => index);
+  const indexes = proxyFileCountKnown ? Array.from({ length: total }, (_, index) => index) : null;
   const batchSize = 16;
   let completed = 0;
   let failed = false;
   button.disabled = true;
-  button.textContent = t("检测中 {0}/{1}", "config.proxy.probingProgress", 0, total);
-  if (!total) {
+  button.textContent = proxyFileCountKnown
+    ? t("检测中 {0}/{1}", "config.proxy.probingProgress", 0, total)
+    : t("正在检测代理节点…", "config.proxy.probing");
+  $("#proxy-probe-summary").textContent = button.textContent;
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+  if (proxyFileCountKnown && !total) {
     renderProbeResults([]);
     button.disabled = false;
     return;
   }
   try {
-    for (let offset = 0; offset < total; offset += batchSize) {
-      const batch = indexes.slice(offset, offset + batchSize);
+    const batches = indexes ? Array.from({ length: Math.ceil(total / batchSize) }, (_, i) => indexes.slice(i * batchSize, (i + 1) * batchSize)) : [[]];
+    for (const batch of batches) {
       const result = await api("/api/proxies/probe", { method: "POST", body: JSON.stringify({ indexes: batch }) });
       for (const item of result.results || []) previous.set(item.index, item);
-      completed += batch.length;
+      completed += batch.length || (result.results || []).length;
       renderProbeResults([...previous.values()].sort((a, b) => a.index - b.index));
-      button.textContent = t("检测中 {0}/{1}", "config.proxy.probingProgress", completed, total);
-      $("#proxy-probe-summary").textContent = `${t("检测中 {0}/{1}", "config.proxy.probingProgress", completed, total)}`;
+      if (indexes) {
+        button.textContent = t("检测中 {0}/{1}", "config.proxy.probingProgress", completed, total);
+        $("#proxy-probe-summary").textContent = button.textContent;
+      } else {
+        button.textContent = t("检测中，已完成 {0} 个节点", "config.proxy.probingUnknownProgress", completed);
+        $("#proxy-probe-summary").textContent = button.textContent;
+      }
     }
   } catch (error) {
     failed = true;
