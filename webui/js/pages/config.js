@@ -140,9 +140,10 @@ async function deleteSelectedProxies() {
 async function importProxyFile(file) {
   if (!file) return;
   try {
+    if (!(store.get("config")?.proxyfile || "").trim()) {
+      throw new Error(t("请先填写 Proxy File（例如 proxies.txt）并保存，再导入", "config.proxy.fileRequired"));
+    }
     const text = await file.text();
-    const current = $("#proxies-new").value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    const seen = new Set(current.map((line) => line.toLowerCase()));
     const imported = [];
     let skipped = 0;
     for (let line of text.replace(/^\uFEFF/, "").split(/\r?\n/)) {
@@ -156,18 +157,15 @@ async function importProxyFile(file) {
         skipped++;
         continue;
       }
-      const key = line.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
       imported.push(line);
     }
     if (!imported.length) {
       toast(t(`没有新增代理（跳过无效行 ${skipped} 行）`, "config.proxy.importEmpty", skipped), skipped > 0);
       return;
     }
-    const textarea = $("#proxies-new");
-    textarea.value = [...current, ...imported].join("\n");
-    toast(t(`导入 ${imported.length} 个节点，跳过无效行 ${skipped} 行`, "config.proxy.imported", imported.length, skipped));
+    const result = await api("/api/proxies/import", { method: "POST", body: JSON.stringify({ proxies: imported }) });
+    store.set("config", result.config);
+    toast(t(`已合并 ${result.added} 个节点到 Proxy File，跳过无效行 ${skipped} 行`, "config.proxy.imported", result.added, skipped));
   } catch (error) {
     toast(error.message || t("读取文件失败", "config.proxy.importError"), true);
   } finally {

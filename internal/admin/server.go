@@ -61,6 +61,7 @@ func (a *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/config", a.authenticate(a.csrf(http.HandlerFunc(a.handlePutConfig))))
 	mux.Handle("POST /api/proxies/probe", a.authenticate(a.csrf(http.HandlerFunc(a.handleProbeProxies))))
 	mux.Handle("POST /api/proxies/delete", a.authenticate(a.csrf(http.HandlerFunc(a.handleDeleteProxies))))
+	mux.Handle("POST /api/proxies/import", a.authenticate(a.csrf(http.HandlerFunc(a.handleImportProxies))))
 	mux.Handle("POST /api/config/reload", a.authenticate(a.csrf(http.HandlerFunc(a.handleReload))))
 	mux.Handle("POST /api/config/reveal", a.authenticate(a.csrf(http.HandlerFunc(a.handleReveal))))
 	mux.Handle("PUT /api/account", a.authenticate(a.csrf(http.HandlerFunc(a.handleAccount))))

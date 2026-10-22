@@ -3,7 +3,9 @@ package admin
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +15,124 @@ import (
 	"opencode2api/internal/gateway"
 	"opencode2api/internal/httpx"
 )
+
+func (a *Server) handleImportProxies(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Proxies []string `json:"proxies"`
+	}
+	if err := decodeAdminJSON(w, r, &input); err != nil {
+		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if len(input.Proxies) == 0 {
+		writeAdminError(w, http.StatusBadRequest, "empty_import", "no valid proxy entries were provided")
+		return
+	}
+	var added int
+	_, err := a.manager.Update(func(cfg *config.Config) error {
+		if strings.TrimSpace(cfg.ProxyFile) == "" {
+			return errors.New("configure Proxy File (for example proxies.txt) before importing")
+		}
+		path := cfg.ProxyFile
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(filepath.Dir(a.manager.ConfigPath()), path)
+		}
+		current, err := config.ReadProxyFile(path)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("read Proxy File: %w", err)
+		}
+		original, err := os.ReadFile(path)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("read Proxy File: %w", err)
+		}
+		all := append([]string(nil), current...)
+		var additions []string
+		seen := make(map[string]struct{}, len(current)+len(input.Proxies))
+		for _, value := range current {
+			clean, pool := config.ParseProxyEntry(value)
+			seen[proxyImportKey(clean, pool)] = struct{}{}
+		}
+		for _, value := range input.Proxies {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				continue
+			}
+			if !validImportedProxy(value) {
+				return fmt.Errorf("invalid proxy entry: %s", config.RedactURL(value))
+			}
+			clean, pool := config.ParseProxyEntry(value)
+			key := proxyImportKey(clean, pool)
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			all = append(all, value)
+			additions = append(additions, value)
+			added++
+		}
+		if added == 0 {
+			return nil
+		}
+		if err := replaceProxyFile(path, original, additions); err != nil {
+			return fmt.Errorf("write Proxy File: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		writeAdminError(w, http.StatusBadRequest, "proxy_import_failed", err.Error())
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"added": added, "config": a.configView()})
+}
+
+func proxyImportKey(value string, pool bool) string {
+	return strings.ToLower(value) + fmt.Sprintf("#pool=%t", pool)
+}
+
+func replaceProxyFile(path string, original []byte, additions []string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	mode := os.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	temp, err := os.CreateTemp(filepath.Dir(path), ".proxies-import-*.tmp")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if err := temp.Chmod(mode); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	content := string(original)
+	if len(content) > 0 && !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	content += strings.Join(additions, "\n") + "\n"
+	if _, err := temp.WriteString(content); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tempPath, path)
+}
+
+func validImportedProxy(value string) bool {
+	clean, _ := config.ParseProxyEntry(value)
+	u, err := url.Parse(clean)
+	return err == nil && u.Hostname() != "" && u.Port() != "" && (u.Scheme == "http" || u.Scheme == "https" || u.Scheme == "socks5" || u.Scheme == "socks5h")
+}
 
 func (a *Server) handleProbeProxies(w http.ResponseWriter, r *http.Request) {
 	var input struct {
