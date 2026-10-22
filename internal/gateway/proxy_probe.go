@@ -12,19 +12,30 @@ import (
 // ProbeProxies checks every route independently using the regular HTTP client.
 // It checks the free model catalog endpoint, reports its HTTP status even
 // when it is 403/429, and does not change automatic proxy health.
-func (g *Gateway) ProbeProxies(parent context.Context, timeout time.Duration) []ProxyProbeResult {
-	results := make([]ProxyProbeResult, len(g.transports.items))
-	semaphore := make(chan struct{}, 32)
+func (g *Gateway) ProbeProxies(parent context.Context, timeout time.Duration, indexes []int) []ProxyProbeResult {
+	if len(indexes) == 0 {
+		indexes = make([]int, len(g.transports.items))
+		for i := range indexes {
+			indexes[i] = i
+		}
+	}
+	results := make([]ProxyProbeResult, len(indexes))
+	semaphore := make(chan struct{}, 16)
 	var wg sync.WaitGroup
-	for i, proxy := range g.transports.items {
+	for resultIndex, i := range indexes {
+		if i < 0 || i >= len(g.transports.items) {
+			results[resultIndex] = ProxyProbeResult{Index: i, Error: "invalid proxy index"}
+			continue
+		}
+		proxy := g.transports.items[i]
 		wg.Add(1)
-		go func(i int, proxy *proxyTransport) {
+		go func(resultIndex, i int, proxy *proxyTransport) {
 			defer wg.Done()
 			select {
 			case semaphore <- struct{}{}:
 				defer func() { <-semaphore }()
 			case <-parent.Done():
-				results[i] = ProxyProbeResult{Index: i, Address: config.RedactURL(proxy.name), Error: "probe canceled", Timeout: parent.Err() == context.DeadlineExceeded}
+				results[resultIndex] = ProxyProbeResult{Index: i, Address: config.RedactURL(proxy.name), Error: "probe canceled", Timeout: parent.Err() == context.DeadlineExceeded}
 				return
 			}
 			result := ProxyProbeResult{Index: i, Address: config.RedactURL(proxy.name)}
@@ -42,8 +53,8 @@ func (g *Gateway) ProbeProxies(parent context.Context, timeout time.Duration) []
 				result.Error = "proxy request failed"
 				result.Timeout = ctx.Err() == context.DeadlineExceeded
 			}
-			results[i] = result
-		}(i, proxy)
+			results[resultIndex] = result
+		}(resultIndex, i, proxy)
 	}
 	wg.Wait()
 	return results

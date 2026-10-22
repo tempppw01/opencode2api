@@ -18,16 +18,18 @@ function syncProbeControls() {
 }
 
 function selectProbeResults() {
+  const changed = document.activeElement?.id;
   const all = $("#proxy-select-all").checked;
   const timeout = $("#proxy-select-timeout").checked;
   const rateLimited = $("#proxy-select-429").checked;
   const forbidden = $("#proxy-select-403").checked;
-  if (all || timeout || rateLimited || forbidden) {
-    $$("#proxy-probe-results input[data-index]").forEach((input) => {
-      const result = probeResults[Number(input.dataset.index)];
-      input.checked = all || (timeout && result?.timeout) || (rateLimited && result?.status === 429) || (forbidden && result?.status === 403);
-    });
-  }
+  $$("#proxy-probe-results input[data-index]").forEach((input) => {
+    const result = probeResults[Number(input.dataset.index)];
+    if (changed === "proxy-select-all") input.checked = all;
+    else if (changed === "proxy-select-timeout") input.checked = timeout ? Boolean(result?.timeout) || input.checked : !result?.timeout && input.checked;
+    else if (changed === "proxy-select-429") input.checked = rateLimited ? result?.status === 429 || input.checked : result?.status !== 429 && input.checked;
+    else if (changed === "proxy-select-403") input.checked = forbidden ? result?.status === 403 || input.checked : result?.status !== 403 && input.checked;
+  });
   syncProbeControls();
 }
 
@@ -71,15 +73,37 @@ function renderProbeResults(results) {
 }
 
 async function probeProxies() {
-  $("#proxy-probe").disabled = true;
-  $("#proxy-probe-summary").textContent = t("正在检测代理节点…", "config.proxy.probing");
+  const button = $("#proxy-probe");
+  const total = (store.get("config")?.proxies?.length || 0) + (store.get("config")?.proxyfile ? Number(store.get("config")?.proxyfile_count || 0) : 0);
+  const previous = new Map(probeResults.map((item) => [item.index, item]));
+  const indexes = Array.from({ length: total }, (_, index) => index);
+  const batchSize = 16;
+  let completed = 0;
+  let failed = false;
+  button.disabled = true;
+  button.textContent = t("检测中 {0}/{1}", "config.proxy.probingProgress", 0, total);
+  if (!total) {
+    renderProbeResults([]);
+    button.disabled = false;
+    return;
+  }
   try {
-    const result = await api("/api/proxies/probe", { method: "POST", body: "{}" });
-    renderProbeResults(result.results);
+    for (let offset = 0; offset < total; offset += batchSize) {
+      const batch = indexes.slice(offset, offset + batchSize);
+      const result = await api("/api/proxies/probe", { method: "POST", body: JSON.stringify({ indexes: batch }) });
+      for (const item of result.results || []) previous.set(item.index, item);
+      completed += batch.length;
+      renderProbeResults([...previous.values()].sort((a, b) => a.index - b.index));
+      button.textContent = t("检测中 {0}/{1}", "config.proxy.probingProgress", completed, total);
+      $("#proxy-probe-summary").textContent = `${t("检测中 {0}/{1}", "config.proxy.probingProgress", completed, total)}`;
+    }
   } catch (error) {
+    failed = true;
     toast(error.message, true);
   } finally {
-    $("#proxy-probe").disabled = false;
+    button.disabled = false;
+    button.textContent = t("一键测活", "config.proxy.probe");
+    if (failed) $("#proxy-probe-summary").textContent = t("检测已中断，已显示部分结果", "config.proxy.probeInterrupted");
     syncProbeControls();
   }
 }
@@ -96,6 +120,44 @@ async function deleteSelectedProxies() {
     toast(t(`已删除 ${result.removed} 个代理节点`, "config.proxy.deleted", result.removed));
   } catch (error) {
     toast(error.message, true);
+  }
+}
+
+async function importProxyFile(file) {
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const current = $("#proxies-new").value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const seen = new Set(current.map((line) => line.toLowerCase()));
+    const imported = [];
+    let skipped = 0;
+    for (let line of text.replace(/^\uFEFF/, "").split(/\r?\n/)) {
+      line = line.trim();
+      if (!line || line.startsWith("#") || line.startsWith(";") || line.startsWith("//")) continue;
+      if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(line)) line = `http://${line}`;
+      try {
+        const url = new URL(line);
+        if (!["http:", "https:", "socks5:", "socks5h:"].includes(url.protocol) || !url.hostname || !url.port) throw new Error("invalid proxy");
+      } catch {
+        skipped++;
+        continue;
+      }
+      const key = line.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      imported.push(line);
+    }
+    if (!imported.length) {
+      toast(t(`没有新增代理（跳过无效行 ${skipped} 行）`, "config.proxy.importEmpty", skipped), skipped > 0);
+      return;
+    }
+    const textarea = $("#proxies-new");
+    textarea.value = [...current, ...imported].join("\n");
+    toast(t(`导入 ${imported.length} 个节点，跳过无效行 ${skipped} 行`, "config.proxy.imported", imported.length, skipped));
+  } catch (error) {
+    toast(error.message || t("读取文件失败", "config.proxy.importError"), true);
+  } finally {
+    $("#proxy-import-file").value = "";
   }
 }
 
@@ -305,6 +367,8 @@ export default {
     $("#reveal").addEventListener("click", reveal);
     $("#proxy-probe").addEventListener("click", probeProxies);
     $("#proxy-delete").addEventListener("click", deleteSelectedProxies);
+    $("#proxy-import").addEventListener("click", () => $("#proxy-import-file").click());
+    $("#proxy-import-file").addEventListener("change", (event) => importProxyFile(event.target.files?.[0]));
     ["#proxy-select-all", "#proxy-select-timeout", "#proxy-select-429", "#proxy-select-403"].forEach((selector) => $(selector).addEventListener("change", selectProbeResults));
     onChange(() => {
       const value = store.get("config");

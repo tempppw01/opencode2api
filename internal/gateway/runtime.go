@@ -412,12 +412,12 @@ type ProxyProbeResult struct {
 
 // ProbeProxies checks each configured route concurrently and preserves the
 // runtime's health flags: an upstream's 403/429 says nothing about proxy reachability.
-func (m *RuntimeController) ProbeProxies(ctx context.Context, timeout time.Duration) []ProxyProbeResult {
+func (m *RuntimeController) ProbeProxies(ctx context.Context, timeout time.Duration, indexes []int) []ProxyProbeResult {
 	runtime := m.current.Load()
 	if runtime == nil || runtime.gateway == nil {
 		return nil
 	}
-	return runtime.gateway.ProbeProxies(ctx, timeout)
+	return runtime.gateway.ProbeProxies(ctx, timeout, indexes)
 }
 
 // Resources reports the current runtime's servable models, per-key state and

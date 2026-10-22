@@ -75,6 +75,10 @@
   width: auto;
 }
 
+.proxy-import-actions {
+  margin-bottom: var(--sp-2);
+}
+
 .metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
