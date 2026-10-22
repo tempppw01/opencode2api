@@ -137,6 +137,29 @@ async function deleteSelectedProxies() {
   }
 }
 
+async function clearConfiguredProxies() {
+  const count = store.get("config")?.proxies?.length || 0;
+  if (!count) {
+    toast(t("WebUI 代理列表已经为空", "config.proxy.clearConfiguredEmpty"));
+    return;
+  }
+  if (!(await confirmDialog({
+    title: t("清空 WebUI 代理", "config.proxy.clearConfigured"),
+    message: t(`确定清空配置中心中的 ${count} 个代理？Proxy File 和 proxies.txt 不会被修改。`, "config.proxy.clearConfiguredConfirm", count),
+    danger: true,
+    confirmLabel: t("清空", "config.proxy.clearAction"),
+  }))) return;
+  try {
+    const result = await api("/api/proxies/configured", { method: "DELETE" });
+    store.set("config", result.config);
+    $("#proxies-new").value = "";
+    renderProbeResults([]);
+    toast(t("已清空 {0} 个 WebUI 代理；Proxy File 未修改", "config.proxy.clearConfiguredDone", count));
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+
 async function importProxyFile(file) {
   if (!file) return;
   try {
@@ -380,6 +403,7 @@ export default {
     $("#reveal").addEventListener("click", reveal);
     $("#proxy-probe").addEventListener("click", probeProxies);
     $("#proxy-delete").addEventListener("click", deleteSelectedProxies);
+    $("#proxy-clear-configured").addEventListener("click", clearConfiguredProxies);
     $("#proxy-import").addEventListener("click", () => $("#proxy-import-file").click());
     $("#proxy-import-file").addEventListener("change", (event) => importProxyFile(event.target.files?.[0]));
     ["#proxy-select-all", "#proxy-select-timeout", "#proxy-select-429", "#proxy-select-403"].forEach((selector) => $(selector).addEventListener("change", selectProbeResults));

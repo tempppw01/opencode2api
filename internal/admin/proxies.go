@@ -16,6 +16,20 @@ import (
 	"opencode2api/internal/httpx"
 )
 
+func (a *Server) handleClearConfiguredProxies(w http.ResponseWriter, _ *http.Request) {
+	removed := len(a.manager.Config().Proxies)
+	_, err := a.manager.Update(func(cfg *config.Config) error {
+		removed = len(cfg.Proxies)
+		cfg.Proxies = nil
+		return nil
+	})
+	if err != nil {
+		writeAdminError(w, http.StatusBadRequest, "proxy_clear_failed", err.Error())
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"removed": removed, "config": a.configView()})
+}
+
 func (a *Server) handleImportProxies(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Proxies []string `json:"proxies"`
