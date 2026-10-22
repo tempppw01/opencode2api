@@ -23,6 +23,7 @@ import (
 type probeResult struct {
 	success, attempted, effortRejected bool
 	reason, channel                    string
+	status                             int
 	effort                             models.EffortProbe
 }
 
@@ -215,6 +216,7 @@ func (g *Gateway) probeAttempt(parent context.Context, client *http.Client, base
 		return result
 	}
 	defer resp.Body.Close()
+	result.status = resp.StatusCode
 	if resp.StatusCode/100 != 2 {
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		result.reason = fmt.Sprintf("http_%d", resp.StatusCode)

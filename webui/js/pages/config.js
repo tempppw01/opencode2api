@@ -39,7 +39,7 @@ function renderProbeResults(results) {
   const body = $("#proxy-probe-results");
   body.replaceChildren();
   if (!probeResults.length) {
-    body.append(el("tr", {}, el("td", { class: "empty", colspan: 6, text: t("没有代理节点", "config.proxy.none") })));
+    body.append(el("tr", {}, el("td", { class: "empty", colspan: 7, text: t("没有代理节点", "config.proxy.none") })));
     $("#proxy-probe-summary").textContent = t("没有可检测的代理节点", "config.proxy.none");
     syncProbeControls();
     return;
@@ -60,6 +60,7 @@ function renderProbeResults(results) {
       el("td", {}, checkbox),
       el("td", { class: "mono", text: result.address }),
       el("td", { text: result.channel || "—" }),
+      el("td", { class: "mono", text: result.model || "—" }),
       el("td", { class: `num ${tone}`, text: status }),
       el("td", { class: "num", text: `${result.duration_ms} ms` }),
       el("td", { class: tone, text: result.error ? `${issue} (${result.timeout ? t("超时", "config.proxy.timeout") : t("代理请求失败", "config.proxy.requestError")})` : issue }),
@@ -96,7 +97,7 @@ async function probeProxies() {
       const byIndex = new Map();
       for (let start = 0; start < total; start += batchSize) {
         const indexes = Array.from({ length: Math.min(batchSize, total - start) }, (_, offset) => start + offset);
-        const result = await api("/api/proxies/probe", { method: "POST", body: JSON.stringify({ indexes }) });
+        const result = await api("/api/proxies/probe", { method: "POST", body: JSON.stringify({ indexes, channel: $("#proxy-probe-channel").value }) });
         for (const item of result.results || []) byIndex.set(item.index, item);
         completed = Math.min(start + indexes.length, total);
         renderProbeResults([...byIndex.values()].sort((a, b) => a.index - b.index));

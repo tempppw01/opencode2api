@@ -405,6 +405,7 @@ type ProxyProbeResult struct {
 	Index    int    `json:"index"`
 	Address  string `json:"address"`
 	Channel  string `json:"channel"`
+	Model    string `json:"model,omitempty"`
 	Status   int    `json:"status"`
 	Duration int64  `json:"duration_ms"`
 	Error    string `json:"error,omitempty"`
@@ -413,12 +414,12 @@ type ProxyProbeResult struct {
 
 // ProbeProxies checks each configured route concurrently and preserves the
 // runtime's health flags: an upstream's 403/429 says nothing about proxy reachability.
-func (m *RuntimeController) ProbeProxies(ctx context.Context, timeout time.Duration, indexes []int) []ProxyProbeResult {
+func (m *RuntimeController) ProbeProxies(ctx context.Context, timeout time.Duration, indexes []int, channel string) []ProxyProbeResult {
 	runtime := m.current.Load()
 	if runtime == nil || runtime.gateway == nil {
 		return nil
 	}
-	return runtime.gateway.ProbeProxies(ctx, timeout, indexes)
+	return runtime.gateway.ProbeProxies(ctx, timeout, indexes, channel)
 }
 
 // Resources reports the current runtime's servable models, per-key state and

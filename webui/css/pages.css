@@ -57,6 +57,11 @@
   font-size: var(--fs-sm);
 }
 
+.proxy-tool-actions select {
+  width: auto;
+  min-width: 130px;
+}
+
 #proxy-probe.is-loading {
   min-width: 132px;
   opacity: 0.8;
@@ -70,7 +75,7 @@
 }
 
 .proxy-probe-table {
-  min-width: 680px;
+  min-width: 820px;
 }
 
 .proxy-probe-table td:first-child {

@@ -16,7 +16,8 @@ import (
 
 func (a *Server) handleProbeProxies(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Indexes []int `json:"indexes"`
+		Indexes []int  `json:"indexes"`
+		Channel string `json:"channel"`
 	}
 	if err := decodeAdminJSON(w, r, &input); err != nil {
 		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
@@ -24,7 +25,7 @@ func (a *Server) handleProbeProxies(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	results := a.manager.ProbeProxies(ctx, 12*time.Second, input.Indexes)
+	results := a.manager.ProbeProxies(ctx, 60*time.Second, input.Indexes, input.Channel)
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"results": results})
 }
 
