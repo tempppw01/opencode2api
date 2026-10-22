@@ -1,5 +1,5 @@
 // Page: 配置中心 — masked config editing with validation, hot reload and reveal.
-import { api } from "../api.js";
+import { api, apiStream } from "../api.js";
 import { loadConfig, loadDebugModels } from "../data.js";
 import * as store from "../store.js";
 import { t, onChange } from "../i18n.js";
@@ -74,40 +74,30 @@ function renderProbeResults(results) {
 
 async function probeProxies() {
   const button = $("#proxy-probe");
-  const config = store.get("config") || {};
-  const proxyFileCountKnown = !config.proxyfile || Number.isFinite(Number(config.proxyfile_count));
-  const total = (config.proxies?.length || 0) + (config.proxyfile ? Number(config.proxyfile_count || 0) : 0);
-  const previous = new Map(probeResults.map((item) => [item.index, item]));
-  const indexes = proxyFileCountKnown ? Array.from({ length: total }, (_, index) => index) : null;
-  const batchSize = 16;
+  const previous = new Map();
   let completed = 0;
+  let ended = false;
   let failed = false;
   button.disabled = true;
-  button.textContent = proxyFileCountKnown
-    ? t("检测中 {0}/{1}", "config.proxy.probingProgress", 0, total)
-    : t("正在检测代理节点…", "config.proxy.probing");
+  button.textContent = t("检测中…", "config.proxy.probing");
   $("#proxy-probe-summary").textContent = button.textContent;
   await new Promise((resolve) => requestAnimationFrame(resolve));
-  if (proxyFileCountKnown && !total) {
-    renderProbeResults([]);
-    button.disabled = false;
-    return;
-  }
   try {
-    const batches = indexes ? Array.from({ length: Math.ceil(total / batchSize) }, (_, i) => indexes.slice(i * batchSize, (i + 1) * batchSize)) : [[]];
-    for (const batch of batches) {
-      const result = await api("/api/proxies/probe", { method: "POST", body: JSON.stringify({ indexes: batch }) });
-      for (const item of result.results || []) previous.set(item.index, item);
-      completed += batch.length || (result.results || []).length;
-      renderProbeResults([...previous.values()].sort((a, b) => a.index - b.index));
-      if (indexes) {
-        button.textContent = t("检测中 {0}/{1}", "config.proxy.probingProgress", completed, total);
-        $("#proxy-probe-summary").textContent = button.textContent;
-      } else {
+    await apiStream("/api/proxies/probe", { method: "POST", body: JSON.stringify({ indexes: [] }) }, (message) => {
+      if (message.type === "started") {
+        $("#proxy-probe-summary").textContent = t("测活请求已送达，等待节点结果…", "config.proxy.probeStarted");
+      } else if (message.type === "result") {
+        previous.set(message.result.index, message.result);
+        completed++;
+        renderProbeResults([...previous.values()].sort((a, b) => a.index - b.index));
         button.textContent = t("检测中，已完成 {0} 个节点", "config.proxy.probingUnknownProgress", completed);
         $("#proxy-probe-summary").textContent = button.textContent;
+      } else if (message.type === "done") {
+        ended = true;
+        if (!completed) renderProbeResults([]);
       }
-    }
+    });
+    if (!ended) throw new Error(t("测活连接提前断开，已显示部分结果", "config.proxy.probeInterrupted"));
   } catch (error) {
     failed = true;
     toast(error.message, true);

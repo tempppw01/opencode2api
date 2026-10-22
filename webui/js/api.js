@@ -41,6 +41,30 @@ export async function api(path, options = {}) {
   return data;
 }
 
+export async function apiStream(path, options = {}, onMessage = () => {}) {
+  const headers = { ...(options.headers || {}), Accept: "application/x-ndjson", "Content-Type": "application/json" };
+  if (csrf && !["GET", "HEAD"].includes((options.method || "GET").toUpperCase())) headers["X-CSRF-Token"] = csrf;
+  const response = await fetch(path, { ...options, headers });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 401 && onUnauthorized) onUnauthorized();
+    throw new Error(data.error?.message || `HTTP ${response.status}`);
+  }
+  if (!response.body) throw new Error("Streaming response is unavailable in this browser");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    pending += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const lines = pending.split(/\r?\n/);
+    pending = lines.pop() || "";
+    for (const line of lines) if (line) onMessage(JSON.parse(line));
+    if (done) break;
+  }
+  if (pending.trim()) onMessage(JSON.parse(pending));
+}
+
 // Client-facing API base derived from the configured listen address.
 export function derivedAPIBase() {
   const config = store.get("config");

@@ -12,7 +12,7 @@ import (
 // ProbeProxies checks every route independently using the regular HTTP client.
 // It checks the free model catalog endpoint, reports its HTTP status even
 // when it is 403/429, and does not change automatic proxy health.
-func (g *Gateway) ProbeProxies(parent context.Context, timeout time.Duration, indexes []int) []ProxyProbeResult {
+func (g *Gateway) ProbeProxies(parent context.Context, timeout time.Duration, indexes []int, onResult func(ProxyProbeResult)) []ProxyProbeResult {
 	if len(indexes) == 0 {
 		indexes = make([]int, len(g.transports.items))
 		for i := range indexes {
@@ -22,6 +22,15 @@ func (g *Gateway) ProbeProxies(parent context.Context, timeout time.Duration, in
 	results := make([]ProxyProbeResult, len(indexes))
 	semaphore := make(chan struct{}, 16)
 	var wg sync.WaitGroup
+	var resultMu sync.Mutex
+	storeResult := func(resultIndex int, result ProxyProbeResult) {
+		resultMu.Lock()
+		results[resultIndex] = result
+		resultMu.Unlock()
+		if onResult != nil {
+			onResult(result)
+		}
+	}
 	for resultIndex, i := range indexes {
 		if i < 0 || i >= len(g.transports.items) {
 			results[resultIndex] = ProxyProbeResult{Index: i, Error: "invalid proxy index"}
@@ -35,7 +44,7 @@ func (g *Gateway) ProbeProxies(parent context.Context, timeout time.Duration, in
 			case semaphore <- struct{}{}:
 				defer func() { <-semaphore }()
 			case <-parent.Done():
-				results[resultIndex] = ProxyProbeResult{Index: i, Address: config.RedactURL(proxy.name), Error: "probe canceled", Timeout: parent.Err() == context.DeadlineExceeded}
+				storeResult(resultIndex, ProxyProbeResult{Index: i, Address: config.RedactURL(proxy.name), Error: "probe canceled", Timeout: parent.Err() == context.DeadlineExceeded})
 				return
 			}
 			result := ProxyProbeResult{Index: i, Address: config.RedactURL(proxy.name)}
@@ -53,7 +62,7 @@ func (g *Gateway) ProbeProxies(parent context.Context, timeout time.Duration, in
 				result.Error = "proxy request failed"
 				result.Timeout = ctx.Err() == context.DeadlineExceeded
 			}
-			results[resultIndex] = result
+			storeResult(resultIndex, result)
 		}(resultIndex, i, proxy)
 	}
 	wg.Wait()
