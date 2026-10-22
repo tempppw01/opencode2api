@@ -30,6 +30,44 @@ func (a *Server) handleClearConfiguredProxies(w http.ResponseWriter, _ *http.Req
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"removed": removed, "config": a.configView()})
 }
 
+func mergeProxyImport(path string, proxies []string) ([]byte, int, error) {
+	current, err := config.ReadProxyFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, 0, fmt.Errorf("read Proxy File: %w", err)
+	}
+	original, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, 0, fmt.Errorf("read Proxy File: %w", err)
+	}
+	seen := make(map[string]struct{}, len(current)+len(proxies))
+	for _, value := range current {
+		clean, pool := config.ParseProxyEntry(value)
+		seen[proxyImportKey(clean, pool)] = struct{}{}
+	}
+	var additions []string
+	for _, value := range proxies {
+		value = strings.TrimSpace(value)
+		if value == "" || !validImportedProxy(value) {
+			return nil, 0, fmt.Errorf("invalid proxy entry: %s", config.RedactURL(value))
+		}
+		clean, pool := config.ParseProxyEntry(value)
+		key := proxyImportKey(clean, pool)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		additions = append(additions, value)
+	}
+	if len(additions) == 0 {
+		return original, 0, nil
+	}
+	if err := replaceProxyFile(path, original, additions); err != nil {
+		return nil, 0, fmt.Errorf("write Proxy File: %w", err)
+	}
+	updated, err := os.ReadFile(path)
+	return updated, len(additions), err
+}
+
 func (a *Server) handleImportProxies(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Proxies []string `json:"proxies"`
@@ -44,52 +82,13 @@ func (a *Server) handleImportProxies(w http.ResponseWriter, r *http.Request) {
 	}
 	var added int
 	_, err := a.manager.Update(func(cfg *config.Config) error {
-		if strings.TrimSpace(cfg.ProxyFile) == "" {
-			return errors.New("configure Proxy File (for example proxies.txt) before importing")
+		path := filepath.Join(filepath.Dir(a.manager.ConfigPath()), "proxies.txt")
+		var mergeErr error
+		_, added, mergeErr = mergeProxyImport(path, input.Proxies)
+		if mergeErr != nil {
+			return mergeErr
 		}
-		path := cfg.ProxyFile
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(filepath.Dir(a.manager.ConfigPath()), path)
-		}
-		current, err := config.ReadProxyFile(path)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("read Proxy File: %w", err)
-		}
-		original, err := os.ReadFile(path)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("read Proxy File: %w", err)
-		}
-		all := append([]string(nil), current...)
-		var additions []string
-		seen := make(map[string]struct{}, len(current)+len(input.Proxies))
-		for _, value := range current {
-			clean, pool := config.ParseProxyEntry(value)
-			seen[proxyImportKey(clean, pool)] = struct{}{}
-		}
-		for _, value := range input.Proxies {
-			value = strings.TrimSpace(value)
-			if value == "" {
-				continue
-			}
-			if !validImportedProxy(value) {
-				return fmt.Errorf("invalid proxy entry: %s", config.RedactURL(value))
-			}
-			clean, pool := config.ParseProxyEntry(value)
-			key := proxyImportKey(clean, pool)
-			if _, exists := seen[key]; exists {
-				continue
-			}
-			seen[key] = struct{}{}
-			all = append(all, value)
-			additions = append(additions, value)
-			added++
-		}
-		if added == 0 {
-			return nil
-		}
-		if err := replaceProxyFile(path, original, additions); err != nil {
-			return fmt.Errorf("write Proxy File: %w", err)
-		}
+		cfg.ProxyFile = "proxies.txt"
 		return nil
 	})
 	if err != nil {

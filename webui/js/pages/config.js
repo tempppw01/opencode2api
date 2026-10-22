@@ -166,9 +166,6 @@ async function clearConfiguredProxies() {
 async function importProxyFile(file) {
   if (!file) return;
   try {
-    if (!(store.get("config")?.proxyfile || "").trim()) {
-      throw new Error(t("请先填写 Proxy File（例如 proxies.txt）并保存，再导入", "config.proxy.fileRequired"));
-    }
     const text = await file.text();
     const imported = [];
     let skipped = 0;
@@ -192,7 +189,7 @@ async function importProxyFile(file) {
     const result = await api("/api/proxies/import", { method: "POST", body: JSON.stringify({ proxies: imported }) });
     store.set("config", result.config);
     $("#proxies-new").value = "";
-    toast(t(`已合并 ${result.added} 个节点到 Proxy File，跳过无效行 ${skipped} 行`, "config.proxy.imported", result.added, skipped));
+    toast(t(`已将 ${result.added} 个代理合并到 proxies.txt（跳过无效行 ${skipped} 行）`, "config.proxy.imported", result.added, skipped));
   } catch (error) {
     toast(error.message || t("读取文件失败", "config.proxy.importError"), true);
   } finally {
