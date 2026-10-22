@@ -138,25 +138,28 @@ async function deleteSelectedProxies() {
 }
 
 async function clearConfiguredProxies() {
-  const count = store.get("config")?.proxies?.length || 0;
-  if (!count) {
-    toast(t("WebUI 代理列表已经为空", "config.proxy.clearConfiguredEmpty"));
-    return;
-  }
+  const count = $("#proxies-chips").children.length;
   if (!(await confirmDialog({
     title: t("清空 WebUI 代理", "config.proxy.clearConfigured"),
     message: t(`确定清空配置中心中的 ${count} 个代理？Proxy File 和 proxies.txt 不会被修改。`, "config.proxy.clearConfiguredConfirm", count),
     danger: true,
     confirmLabel: t("清空", "config.proxy.clearAction"),
   }))) return;
+  const button = $("#proxy-clear-configured");
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  toast(t("正在清空 WebUI 代理…", "config.proxy.clearConfiguredWorking"));
   try {
     const result = await api("/api/proxies/configured", { method: "DELETE" });
     store.set("config", result.config);
     $("#proxies-new").value = "";
     renderProbeResults([]);
-    toast(t("已清空 {0} 个 WebUI 代理；Proxy File 未修改", "config.proxy.clearConfiguredDone", count));
+    toast(t("已清空 {0} 个 WebUI 代理；Proxy File 未修改", "config.proxy.clearConfiguredDone", result.removed));
   } catch (error) {
     toast(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
   }
 }
 
