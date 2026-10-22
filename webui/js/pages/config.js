@@ -79,7 +79,9 @@ async function probeProxies() {
   let ended = false;
   let failed = false;
   button.disabled = true;
-  button.textContent = t("检测中…", "config.proxy.probing");
+  button.classList.add("is-loading");
+  button.setAttribute("aria-busy", "true");
+  button.textContent = `${t("检测中…", "config.proxy.probing")} 0`;
   $("#proxy-probe-summary").textContent = button.textContent;
   await new Promise((resolve) => requestAnimationFrame(resolve));
   try {
@@ -90,7 +92,7 @@ async function probeProxies() {
         previous.set(message.result.index, message.result);
         completed++;
         renderProbeResults([...previous.values()].sort((a, b) => a.index - b.index));
-        button.textContent = t("检测中，已完成 {0} 个节点", "config.proxy.probingUnknownProgress", completed);
+        button.textContent = `${t("检测中…", "config.proxy.probing")} ${completed}`;
         $("#proxy-probe-summary").textContent = button.textContent;
       } else if (message.type === "done") {
         ended = true;
@@ -100,11 +102,14 @@ async function probeProxies() {
     if (!ended) throw new Error(t("测活连接提前断开，已显示部分结果", "config.proxy.probeInterrupted"));
   } catch (error) {
     failed = true;
+    $("#proxy-probe-summary").textContent = `${t("测活失败", "config.proxy.probeFailed")}: ${error.message}`;
     toast(error.message, true);
   } finally {
     button.disabled = false;
+    button.classList.remove("is-loading");
+    button.removeAttribute("aria-busy");
     button.textContent = t("一键测活", "config.proxy.probe");
-    if (failed) $("#proxy-probe-summary").textContent = t("检测已中断，已显示部分结果", "config.proxy.probeInterrupted");
+    if (failed && completed > 0) $("#proxy-probe-summary").textContent = `${t("检测已中断，已显示部分结果", "config.proxy.probeInterrupted")} (${completed})`;
     syncProbeControls();
   }
 }

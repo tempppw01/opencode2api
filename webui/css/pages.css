@@ -57,6 +57,12 @@
   font-size: var(--fs-sm);
 }
 
+#proxy-probe.is-loading {
+  min-width: 132px;
+  opacity: 0.8;
+  cursor: progress;
+}
+
 .proxy-probe-summary {
   min-height: 1.4em;
   color: var(--text-2);
