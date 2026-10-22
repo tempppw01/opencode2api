@@ -88,6 +88,9 @@ func readProxyFile(path string) ([]string, error) {
 	return proxies, nil
 }
 
+// ReadProxyFile exposes the same comment and blank-line handling used by config loading.
+func ReadProxyFile(path string) ([]string, error) { return readProxyFile(path) }
+
 // stripProxyLineComment cuts line at the first "#", ";" or "//" that starts
 // the line or follows a space or tab, so a #pool fragment or the "//" of a
 // URL survives.
@@ -102,6 +105,9 @@ func stripProxyLineComment(line string) string {
 	}
 	return line
 }
+
+// StripProxyLineComment exposes proxy-list inline comment handling for management tools.
+func StripProxyLineComment(line string) string { return stripProxyLineComment(line) }
 
 // uniqueProxyEntries drops empty entries and repeats, keeping the first
 // spelling of each, and filters items in place. Entries are compared by their

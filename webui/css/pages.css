@@ -40,6 +40,41 @@
   align-content: start;
 }
 
+.proxy-tools {
+  display: grid;
+  gap: var(--sp-3);
+  margin: var(--sp-4) 0 var(--sp-5);
+}
+
+.proxy-tool-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-4);
+}
+
+.proxy-tool-actions .check {
+  font-size: var(--fs-sm);
+}
+
+.proxy-probe-summary {
+  min-height: 1.4em;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.proxy-probe-table {
+  min-width: 560px;
+}
+
+.proxy-probe-table td:first-child {
+  width: 36px;
+}
+
+.proxy-probe-table input[type="checkbox"] {
+  width: auto;
+}
+
 .metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

@@ -844,6 +844,24 @@
                   <div class="section-head">
                     <div>
                       <h2 class="section-title" data-i18n="config.proxy.title">Proxy 节点</h2>
+                      <p class="section-caption" data-i18n="config.proxy.caption">逐个检测代理通路，并按检测结果批量清理节点。</p>
+                    </div>
+                  </div>
+                  <div class="proxy-tools">
+                    <div class="proxy-tool-actions">
+                      <button id="proxy-probe" class="btn btn-sm btn-primary" type="button" data-i18n="config.proxy.probe">一键测活</button>
+                      <label class="check"><input id="proxy-select-all" type="checkbox" disabled /><span data-i18n="config.proxy.selectAll">全选检测结果</span></label>
+                      <label class="check"><input id="proxy-select-timeout" type="checkbox" disabled /><span data-i18n="config.proxy.selectTimeout">超时</span></label>
+                      <label class="check"><input id="proxy-select-429" type="checkbox" disabled /><span>429</span></label>
+                      <label class="check"><input id="proxy-select-403" type="checkbox" disabled /><span>403</span></label>
+                      <button id="proxy-delete" class="btn btn-sm btn-danger" type="button" disabled data-i18n="config.proxy.deleteSelected">删除所选</button>
+                    </div>
+                    <div id="proxy-probe-summary" class="proxy-probe-summary" role="status"></div>
+                    <div class="table-wrap">
+                      <table class="table proxy-probe-table">
+                        <thead><tr><th></th><th data-i18n="config.proxy.col.node">节点</th><th data-i18n="config.proxy.col.status">状态码</th><th data-i18n="config.proxy.col.latency">耗时</th><th data-i18n="config.proxy.col.result">检测结果</th></tr></thead>
+                        <tbody id="proxy-probe-results"><tr><td class="empty" colspan="5" data-i18n="config.proxy.probeEmpty">运行测活后显示结果</td></tr></tbody>
+                      </table>
                     </div>
                   </div>
                   <div id="proxies-chips" class="chips"></div>

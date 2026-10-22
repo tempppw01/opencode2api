@@ -230,6 +230,9 @@ func (m *RuntimeController) Config() config.Config {
 	return config.Clone(runtime.config)
 }
 
+// ConfigPath returns the path used to resolve and persist this runtime's configuration.
+func (m *RuntimeController) ConfigPath() string { return m.configPath }
+
 // RestartStatus returns the listeners the process bound at startup and the
 // config fields (listen, webui.listen, webui.enabled) whose current value
 // differs from them, i.e. the changes waiting for a restart.
@@ -395,6 +398,26 @@ type ProxyStatus struct {
 	ZenKeys   int    `json:"zen_keys"`
 	GoKeys    int    `json:"go_keys"`
 	Anonymous bool   `json:"anonymous"`
+}
+
+// ProxyProbeResult reports one explicit health probe without exposing proxy credentials.
+type ProxyProbeResult struct {
+	Index    int    `json:"index"`
+	Address  string `json:"address"`
+	Status   int    `json:"status"`
+	Duration int64  `json:"duration_ms"`
+	Error    string `json:"error,omitempty"`
+	Timeout  bool   `json:"timeout"`
+}
+
+// ProbeProxies checks each configured route concurrently and preserves the
+// runtime's health flags: an upstream's 403/429 says nothing about proxy reachability.
+func (m *RuntimeController) ProbeProxies(ctx context.Context, timeout time.Duration) []ProxyProbeResult {
+	runtime := m.current.Load()
+	if runtime == nil || runtime.gateway == nil {
+		return nil
+	}
+	return runtime.gateway.ProbeProxies(ctx, timeout)
 }
 
 // Resources reports the current runtime's servable models, per-key state and

@@ -3,7 +3,101 @@ import { api } from "../api.js";
 import { loadConfig, loadDebugModels } from "../data.js";
 import * as store from "../store.js";
 import { t, onChange } from "../i18n.js";
-import { $, $$, bindTabs, el, openDialog, toast } from "../ui.js";
+import { $, $$, bindTabs, confirmDialog, el, openDialog, toast } from "../ui.js";
+
+let probeResults = [];
+
+function selectedProbeIndexes() {
+  return [...$("#proxy-probe-results").querySelectorAll("input[data-index]:checked")].map((input) => Number(input.dataset.index));
+}
+
+function syncProbeControls() {
+  const ready = probeResults.length > 0;
+  for (const selector of ["#proxy-select-all", "#proxy-select-timeout", "#proxy-select-429", "#proxy-select-403"]) $(selector).disabled = !ready;
+  $("#proxy-delete").disabled = !selectedProbeIndexes().length;
+}
+
+function selectProbeResults() {
+  const all = $("#proxy-select-all").checked;
+  const timeout = $("#proxy-select-timeout").checked;
+  const rateLimited = $("#proxy-select-429").checked;
+  const forbidden = $("#proxy-select-403").checked;
+  if (all || timeout || rateLimited || forbidden) {
+    $$("#proxy-probe-results input[data-index]").forEach((input) => {
+      const result = probeResults[Number(input.dataset.index)];
+      input.checked = all || (timeout && result?.timeout) || (rateLimited && result?.status === 429) || (forbidden && result?.status === 403);
+    });
+  }
+  syncProbeControls();
+}
+
+function renderProbeResults(results) {
+  probeResults = results || [];
+  for (const selector of ["#proxy-select-all", "#proxy-select-timeout", "#proxy-select-429", "#proxy-select-403"]) $(selector).checked = false;
+  const body = $("#proxy-probe-results");
+  body.replaceChildren();
+  if (!probeResults.length) {
+    body.append(el("tr", {}, el("td", { class: "empty", colspan: 5, text: t("没有代理节点", "config.proxy.none") })));
+    $("#proxy-probe-summary").textContent = t("没有可检测的代理节点", "config.proxy.none");
+    syncProbeControls();
+    return;
+  }
+  let ok = 0;
+  for (const result of probeResults) {
+    const statusOk = result.status >= 200 && result.status < 400;
+    if (statusOk && !result.error) ok++;
+    const checkbox = el("input", { type: "checkbox", dataset: { index: result.index }, "aria-label": `${t("选择节点", "config.proxy.selectNode")} ${result.address}` });
+    checkbox.addEventListener("change", () => {
+      $("#proxy-select-all").checked = false;
+      syncProbeControls();
+    });
+    const status = result.status ? String(result.status) : "—";
+    const issue = result.timeout ? t("超时", "config.proxy.timeout") : result.error ? t("连接失败", "config.proxy.connectError") : statusOk ? t("可达", "config.proxy.reachable") : t("HTTP 响应", "config.proxy.httpResponse");
+    const tone = statusOk && !result.error ? "ok" : result.timeout || result.error || result.status === 403 || result.status === 429 ? "bad" : "warn";
+    const row = el("tr", {}, [
+      el("td", {}, checkbox),
+      el("td", { class: "mono", text: result.address }),
+      el("td", { class: `num ${tone}`, text: status }),
+      el("td", { class: "num", text: `${result.duration_ms} ms` }),
+      el("td", { class: tone, text: result.error ? `${issue} (${result.timeout ? t("超时", "config.proxy.timeout") : t("代理请求失败", "config.proxy.requestError")})` : issue }),
+    ]);
+    body.append(row);
+  }
+  $("#proxy-probe-summary").textContent = t(
+    `检测完成：${probeResults.length} 个节点，可达 ${ok} 个，异常 ${probeResults.length - ok} 个`,
+    "config.proxy.summary", probeResults.length, ok, probeResults.length - ok,
+  );
+  syncProbeControls();
+}
+
+async function probeProxies() {
+  $("#proxy-probe").disabled = true;
+  $("#proxy-probe-summary").textContent = t("正在检测代理节点…", "config.proxy.probing");
+  try {
+    const result = await api("/api/proxies/probe", { method: "POST", body: "{}" });
+    renderProbeResults(result.results);
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    $("#proxy-probe").disabled = false;
+    syncProbeControls();
+  }
+}
+
+async function deleteSelectedProxies() {
+  const indexes = selectedProbeIndexes();
+  if (!indexes.length) return;
+  if (!(await confirmDialog({ title: t("删除代理节点", "config.proxy.confirmTitle"), message: t(`确定删除所选的 ${indexes.length} 个代理节点？`, "config.proxy.confirm", indexes.length), danger: true, confirmLabel: t("删除", "common.remove") }))) return;
+  try {
+    const result = await api("/api/proxies/delete", { method: "POST", body: JSON.stringify({ indexes }) });
+    store.set("config", result.config);
+    $("#proxies-new").value = "";
+    renderProbeResults([]);
+    toast(t(`已删除 ${result.removed} 个代理节点`, "config.proxy.deleted", result.removed));
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
 
 function renderChips(name) {
   const host = $(`#${name}-chips`);
@@ -209,6 +303,9 @@ export default {
     $("#config-form").addEventListener("submit", save);
     $("#reload-config").addEventListener("click", reload);
     $("#reveal").addEventListener("click", reveal);
+    $("#proxy-probe").addEventListener("click", probeProxies);
+    $("#proxy-delete").addEventListener("click", deleteSelectedProxies);
+    ["#proxy-select-all", "#proxy-select-timeout", "#proxy-select-429", "#proxy-select-403"].forEach((selector) => $(selector).addEventListener("change", selectProbeResults));
     onChange(() => {
       const value = store.get("config");
       if (value) renderRestartNotice(value);
