@@ -106,6 +106,33 @@ func proxyImportKey(value string, pool bool) string {
 	return strings.ToLower(value) + fmt.Sprintf("#pool=%t", pool)
 }
 
+func proxyDeleteKey(value string) string {
+	clean, pool := config.ParseProxyEntry(value)
+	return strings.ToLower(clean) + fmt.Sprintf("#pool=%t", pool)
+}
+
+func uniqueRuntimeProxyEntries(values []string) []string {
+	seenStatic := make(map[string]struct{}, len(values))
+	seenPool := make(map[string]struct{}, len(values))
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		clean, pool := config.ParseProxyEntry(value)
+		seen := seenStatic
+		if pool {
+			seen = seenPool
+		}
+		if _, exists := seen[clean]; exists {
+			continue
+		}
+		seen[clean] = struct{}{}
+		unique = append(unique, value)
+	}
+	if len(unique) == 0 {
+		return []string{"direct"}
+	}
+	return unique
+}
+
 func replaceProxyFile(path string, original []byte, additions []string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -208,12 +235,10 @@ func (a *Server) handleDeleteProxies(w http.ResponseWriter, r *http.Request) {
 	var removed int
 	var stagedFile, targetFile string
 	_, err := a.manager.Update(func(cfg *config.Config) error {
-		if len(cfg.RuntimeProxies()) != len(results) {
-			return errors.New("proxy list changed during check; refresh the list and try again")
-		}
 		fileProxies := []string{}
+		path := ""
 		if cfg.ProxyFile != "" {
-			path := cfg.ProxyFile
+			path = cfg.ProxyFile
 			if !filepath.IsAbs(path) {
 				path = filepath.Join(filepath.Dir(a.manager.ConfigPath()), path)
 			}
@@ -223,62 +248,42 @@ func (a *Server) handleDeleteProxies(w http.ResponseWriter, r *http.Request) {
 			}
 			fileProxies = loaded
 		}
-		if len(cfg.Proxies)+len(fileProxies) != len(results) {
+		combined := append(append([]string(nil), cfg.Proxies...), fileProxies...)
+		current := uniqueRuntimeProxyEntries(combined)
+		if len(current) != len(results) {
 			return errors.New("proxy list changed during check; refresh the list and try again")
 		}
-		for index, proxy := range cfg.Proxies {
+		for index, proxy := range current {
 			if config.RedactURL(proxy) != results[index].Address {
 				return errors.New("proxy list changed during check; refresh the list and try again")
 			}
 		}
-		for index, proxy := range fileProxies {
-			if config.RedactURL(proxy) != results[len(cfg.Proxies)+index].Address {
-				return errors.New("proxy file changed during check; refresh the list and try again")
-			}
-		}
+		selectedKeys := make(map[string]struct{}, len(selected))
 		for index := range selected {
-			if index >= len(cfg.Proxies) {
-				fileIndex := index - len(cfg.Proxies)
-				if fileIndex < 0 || fileIndex >= len(fileProxies) {
-					return errors.New("proxy file changed during check; refresh the list and try again")
-				}
-				if config.RedactURL(fileProxies[fileIndex]) != results[index].Address {
-					return errors.New("proxy file changed during check; refresh the list and try again")
-				}
-			} else if config.RedactURL(cfg.Proxies[index]) != results[index].Address {
-				return errors.New("proxy list changed during check; refresh the list and try again")
-			}
+			selectedKeys[proxyDeleteKey(current[index])] = struct{}{}
 		}
 		fileSelected := make(map[int]struct{})
-		for index := range selected {
-			if index >= len(cfg.Proxies) {
-				fileSelected[index-len(cfg.Proxies)] = struct{}{}
+		for index, proxy := range fileProxies {
+			if _, drop := selectedKeys[proxyDeleteKey(proxy)]; drop {
+				fileSelected[index] = struct{}{}
 			}
 		}
-		if cfg.ProxyFile != "" && len(fileSelected) > 0 {
-			path := cfg.ProxyFile
-			if !filepath.IsAbs(path) {
-				path = filepath.Join(filepath.Dir(a.manager.ConfigPath()), path)
-			}
+		if len(fileSelected) > 0 {
 			var err error
 			stagedFile, err = stageProxyFile(path, fileProxies, fileSelected)
 			if err != nil {
 				return err
 			}
 			targetFile = path
+			removed += len(fileSelected)
 		}
 		kept := make([]string, 0, len(cfg.Proxies))
-		for index, value := range cfg.Proxies {
-			if _, drop := selected[index]; drop {
+		for _, value := range cfg.Proxies {
+			if _, drop := selectedKeys[proxyDeleteKey(value)]; drop {
 				removed++
 				continue
 			}
 			kept = append(kept, value)
-		}
-		for index := range selected {
-			if index >= len(cfg.Proxies) {
-				removed++
-			}
 		}
 		cfg.Proxies = kept
 		return nil

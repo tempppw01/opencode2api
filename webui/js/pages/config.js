@@ -133,6 +133,7 @@ async function deleteSelectedProxies() {
     renderProbeResults([]);
     toast(t(`已删除 ${result.removed} 个代理节点`, "config.proxy.deleted", result.removed));
   } catch (error) {
+    $("#proxy-probe-summary").textContent = `${t("删除失败", "config.proxy.deleteFailed")}: ${error.message}`;
     toast(error.message, true);
   }
 }

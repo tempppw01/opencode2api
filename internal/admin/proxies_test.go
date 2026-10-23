@@ -53,3 +53,44 @@ func TestMergeProxyImportNormalizesAndDeduplicatesPoolMarkers(t *testing.T) {
 		t.Fatalf("file content = %q, want %q", content, want)
 	}
 }
+
+func TestUniqueRuntimeProxyEntriesMatchesConfigDeduplication(t *testing.T) {
+	got := uniqueRuntimeProxyEntries([]string{
+		"http://same.example:8080#pool",
+		"http://same.example:8080#pool",
+		"http://same.example:8080",
+		"http://static.example:8080",
+		"http://static.example:8080",
+	})
+	want := []string{"http://same.example:8080#pool", "http://same.example:8080", "http://static.example:8080"}
+	if len(got) != len(want) {
+		t.Fatalf("unique entries = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("unique entries = %#v, want %#v", got, want)
+		}
+	}
+}
+
+func TestStageProxyFileDeletesSelectedRowsAndKeepsComments(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "proxies.txt")
+	original := "# keep this comment\nhttp://one.example:8080#pool\nhttp://two.example:8080#pool\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	temp, err := stageProxyFile(path, []string{"http://one.example:8080#pool", "http://two.example:8080#pool"}, map[int]struct{}{0: {}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(temp)
+	content, err := os.ReadFile(temp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "# keep this comment\nhttp://two.example:8080#pool\n"
+	if string(content) != want {
+		t.Fatalf("staged content = %q, want %q", content, want)
+	}
+}

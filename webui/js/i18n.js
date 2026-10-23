@@ -305,6 +305,7 @@ const DICTIONARY = {
       "config.proxy.confirmTitle": "Delete proxy nodes",
       "config.proxy.confirm": "Delete the selected {0} proxy nodes?",
       "config.proxy.deleted": "Deleted {0} proxy nodes",
+      "config.proxy.deleteFailed": "Proxy deletion failed",
       "config.upstream.title": "Upstream and protocol routing",
       "config.upstream.caption":
         "anonymous will use every available proxy; an explicit protocol mapping wins over inferring the protocol from the model name.",
@@ -895,6 +896,7 @@ const DICTIONARY = {
       "config.proxy.confirmTitle": "Xóa nút proxy",
       "config.proxy.confirm": "Xóa {0} nút proxy đã chọn?",
       "config.proxy.deleted": "Đã xóa {0} nút proxy",
+      "config.proxy.deleteFailed": "Xóa proxy thất bại",
       "config.proxy.add": "Thêm Proxy (mỗi dòng một cái)",
       "config.upstream.title": "Upstream và định tuyến giao thức",
       "config.upstream.caption":
