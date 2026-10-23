@@ -14,7 +14,7 @@ function selectedProbeIndexes() {
 
 function syncProbeControls() {
   const ready = probeResults.length > 0;
-  for (const selector of ["#proxy-select-all", "#proxy-select-timeout", "#proxy-select-429", "#proxy-select-403"]) $(selector).disabled = !ready;
+  for (const selector of ["#proxy-select-all", "#proxy-select-timeout"]) $(selector).disabled = !ready;
   $("#proxy-delete").disabled = !selectedProbeIndexes().length;
   $("#proxy-keep-200").disabled = !probeComplete || !ready;
 }
@@ -23,21 +23,28 @@ function selectProbeResults() {
   const changed = document.activeElement?.id;
   const all = $("#proxy-select-all").checked;
   const timeout = $("#proxy-select-timeout").checked;
-  const rateLimited = $("#proxy-select-429").checked;
-  const forbidden = $("#proxy-select-403").checked;
+  const selectedStatus = changed?.startsWith("proxy-select-status-") ? Number(changed.slice("proxy-select-status-".length)) : null;
   $$("#proxy-probe-results input[data-index]").forEach((input) => {
     const result = probeResults[Number(input.dataset.index)];
     if (changed === "proxy-select-all") input.checked = all;
     else if (changed === "proxy-select-timeout") input.checked = timeout ? Boolean(result?.timeout) || input.checked : !result?.timeout && input.checked;
-    else if (changed === "proxy-select-429") input.checked = rateLimited ? result?.status === 429 || input.checked : result?.status !== 429 && input.checked;
-    else if (changed === "proxy-select-403") input.checked = forbidden ? result?.status === 403 || input.checked : result?.status !== 403 && input.checked;
+    else if (selectedStatus !== null) input.checked = $("#" + CSS.escape(changed)).checked ? result?.status === selectedStatus || input.checked : result?.status !== selectedStatus && input.checked;
   });
   syncProbeControls();
 }
 
 function renderProbeResults(results) {
   probeResults = results || [];
-  for (const selector of ["#proxy-select-all", "#proxy-select-timeout", "#proxy-select-429", "#proxy-select-403"]) $(selector).checked = false;
+  for (const selector of ["#proxy-select-all", "#proxy-select-timeout"]) $(selector).checked = false;
+  const statusFilters = $("#proxy-status-filters");
+  statusFilters.replaceChildren();
+  const statuses = [...new Set(probeResults.map((result) => Number(result.status)).filter((status) => status >= 400 && status <= 599))].sort((a, b) => a - b);
+  for (const status of statuses) {
+    const id = `proxy-select-status-${status}`;
+    const checkbox = el("input", { id, type: "checkbox", disabled: !probeResults.length });
+    checkbox.addEventListener("change", selectProbeResults);
+    statusFilters.append(el("label", { class: "check" }, [checkbox, el("span", { text: String(status) })]));
+  }
   const body = $("#proxy-probe-results");
   body.replaceChildren();
   if (!probeResults.length) {
@@ -58,7 +65,7 @@ function renderProbeResults(results) {
     });
     const status = result.status ? String(result.status) : result.error ? t("无 HTTP 响应", "config.proxy.noHttpResponse") : "—";
     const issue = result.timeout ? t("超时", "config.proxy.timeout") : result.error ? t("连接失败", "config.proxy.connectError") : statusOk ? t("可达", "config.proxy.reachable") : t("HTTP 响应", "config.proxy.httpResponse");
-    const tone = statusOk && !result.error ? "ok" : result.timeout || result.error || result.status === 403 || result.status === 429 ? "bad" : "warn";
+    const tone = statusOk && !result.error ? "ok" : result.timeout || result.error || result.status >= 400 ? "bad" : "warn";
     const row = el("tr", {}, [
       el("td", {}, checkbox),
       el("td", { class: "mono", text: result.address }),
@@ -444,7 +451,7 @@ export default {
     $("#proxy-clear-configured").addEventListener("click", clearConfiguredProxies);
     $("#proxy-import").addEventListener("click", () => $("#proxy-import-file").click());
     $("#proxy-import-file").addEventListener("change", (event) => importProxyFile(event.target.files?.[0]));
-    ["#proxy-select-all", "#proxy-select-timeout", "#proxy-select-429", "#proxy-select-403"].forEach((selector) => $(selector).addEventListener("change", selectProbeResults));
+    ["#proxy-select-all", "#proxy-select-timeout"].forEach((selector) => $(selector).addEventListener("change", selectProbeResults));
     onChange(() => {
       const value = store.get("config");
       if (value) renderRestartNotice(value);

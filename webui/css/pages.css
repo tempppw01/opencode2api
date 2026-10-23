@@ -57,6 +57,22 @@
   font-size: var(--fs-sm);
 }
 
+.proxy-status-filters-label {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.proxy-status-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+.proxy-status-filters .check {
+  font-size: var(--fs-sm);
+}
+
 .proxy-tool-actions select {
   width: auto;
   min-width: 130px;
