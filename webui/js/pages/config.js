@@ -6,6 +6,7 @@ import { t, onChange } from "../i18n.js";
 import { $, $$, bindTabs, confirmDialog, el, openDialog, toast } from "../ui.js";
 
 let probeResults = [];
+let probeComplete = false;
 
 function selectedProbeIndexes() {
   return [...$("#proxy-probe-results").querySelectorAll("input[data-index]:checked")].map((input) => Number(input.dataset.index));
@@ -15,6 +16,7 @@ function syncProbeControls() {
   const ready = probeResults.length > 0;
   for (const selector of ["#proxy-select-all", "#proxy-select-timeout", "#proxy-select-429", "#proxy-select-403"]) $(selector).disabled = !ready;
   $("#proxy-delete").disabled = !selectedProbeIndexes().length;
+  $("#proxy-keep-200").disabled = !probeComplete || !ready;
 }
 
 function selectProbeResults() {
@@ -39,6 +41,7 @@ function renderProbeResults(results) {
   const body = $("#proxy-probe-results");
   body.replaceChildren();
   if (!probeResults.length) {
+    probeComplete = false;
     body.append(el("tr", {}, el("td", { class: "empty", colspan: 7, text: t("没有代理节点", "config.proxy.none") })));
     $("#proxy-probe-summary").textContent = t("没有可检测的代理节点", "config.proxy.none");
     syncProbeControls();
@@ -81,6 +84,7 @@ async function probeProxies() {
   let completed = 0;
   let failed = false;
   let hasResults = false;
+  probeComplete = false;
   button.disabled = true;
   button.classList.add("is-loading");
   button.setAttribute("aria-busy", "true");
@@ -105,8 +109,7 @@ async function probeProxies() {
         button.textContent = `${t("检测中…", "config.proxy.probing")} ${completed}/${total}`;
         $("#proxy-probe-summary").textContent = button.textContent;
       }
-      ended = true;
-      ended = true;
+      probeComplete = true;
     }
   } catch (error) {
     failed = true;
@@ -118,6 +121,39 @@ async function probeProxies() {
     button.removeAttribute("aria-busy");
     button.textContent = t("一键测活", "config.proxy.probe");
     if (failed && hasResults) $("#proxy-probe-summary").textContent = `${t("检测已中断，已显示部分结果", "config.proxy.probeInterrupted")} (${completed})`;
+    syncProbeControls();
+  }
+}
+
+async function keepOnlyHTTP200() {
+  if (!probeComplete) return;
+  const keep = probeResults.filter((result) => result.status === 200 && !result.error);
+  const remove = probeResults.filter((result) => !(result.status === 200 && !result.error));
+  const indexes = remove.map((result) => result.index);
+  if (!indexes.length) {
+    toast(t("所有代理均返回 HTTP 200，无需清理", "config.proxy.keep200None"));
+    return;
+  }
+  if (!(await confirmDialog({
+    title: t("仅保留 HTTP 200", "config.proxy.keep200"),
+    message: t(`测活结果：保留 ${keep.length} 个 HTTP 200 节点，删除 ${remove.length} 个其余节点。`, "config.proxy.keep200Confirm", keep.length, remove.length),
+    danger: true,
+    confirmLabel: t("删除非 200 节点", "config.proxy.keep200Action"),
+  }))) return;
+  const button = $("#proxy-keep-200");
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  try {
+    const result = await api("/api/proxies/delete", { method: "POST", body: JSON.stringify({ indexes }) });
+    store.set("config", result.config);
+    $("#proxies-new").value = "";
+    renderProbeResults([]);
+    toast(t("已保留 {0} 个 HTTP 200 节点，删除 {1} 个其他代理配置项", "config.proxy.keep200Done", keep.length, result.removed));
+  } catch (error) {
+    $("#proxy-probe-summary").textContent = `${t("删除失败", "config.proxy.deleteFailed")}: ${error.message}`;
+    toast(error.message, true);
+  } finally {
+    button.removeAttribute("aria-busy");
     syncProbeControls();
   }
 }
@@ -404,6 +440,7 @@ export default {
     $("#reveal").addEventListener("click", reveal);
     $("#proxy-probe").addEventListener("click", probeProxies);
     $("#proxy-delete").addEventListener("click", deleteSelectedProxies);
+    $("#proxy-keep-200").addEventListener("click", keepOnlyHTTP200);
     $("#proxy-clear-configured").addEventListener("click", clearConfiguredProxies);
     $("#proxy-import").addEventListener("click", () => $("#proxy-import-file").click());
     $("#proxy-import-file").addEventListener("change", (event) => importProxyFile(event.target.files?.[0]));

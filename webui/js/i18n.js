@@ -307,6 +307,11 @@ const DICTIONARY = {
       "config.proxy.confirm": "Delete the selected {0} proxy nodes?",
       "config.proxy.deleted": "Deleted {0} proxy nodes",
       "config.proxy.deleteFailed": "Proxy deletion failed",
+      "config.proxy.keep200": "Keep HTTP 200 only",
+      "config.proxy.keep200Confirm": "Probe results: keep {0} HTTP 200 nodes and delete {1} others.",
+      "config.proxy.keep200Action": "Delete non-200 nodes",
+      "config.proxy.keep200Done": "Kept {0} HTTP 200 nodes; removed {1} proxy entries.",
+      "config.proxy.keep200None": "Every proxy returned HTTP 200; nothing to remove.",
       "config.upstream.title": "Upstream and protocol routing",
       "config.upstream.caption":
         "anonymous will use every available proxy; an explicit protocol mapping wins over inferring the protocol from the model name.",
@@ -899,6 +904,11 @@ const DICTIONARY = {
       "config.proxy.confirm": "Xóa {0} nút proxy đã chọn?",
       "config.proxy.deleted": "Đã xóa {0} nút proxy",
       "config.proxy.deleteFailed": "Xóa proxy thất bại",
+      "config.proxy.keep200": "Chỉ giữ HTTP 200",
+      "config.proxy.keep200Confirm": "Kết quả kiểm tra: giữ {0} nút HTTP 200 và xóa {1} nút còn lại.",
+      "config.proxy.keep200Action": "Xóa các nút không phải 200",
+      "config.proxy.keep200Done": "Đã giữ {0} nút HTTP 200; đã xóa {1} mục proxy.",
+      "config.proxy.keep200None": "Tất cả proxy đều trả về HTTP 200; không cần xóa.",
       "config.proxy.add": "Thêm Proxy (mỗi dòng một cái)",
       "config.upstream.title": "Upstream và định tuyến giao thức",
       "config.upstream.caption":
