@@ -47,11 +47,15 @@ func mergeProxyImport(path string, proxies []string) ([]byte, int, error) {
 	var additions []string
 	for _, value := range proxies {
 		value = strings.TrimSpace(value)
+		if !strings.Contains(value, "://") {
+			value = "http://" + value
+		}
 		if value == "" || !validImportedProxy(value) {
 			return nil, 0, fmt.Errorf("invalid proxy entry: %s", config.RedactURL(value))
 		}
-		clean, pool := config.ParseProxyEntry(value)
-		key := proxyImportKey(clean, pool)
+		clean, _ := config.ParseProxyEntry(value)
+		value = clean + "#pool"
+		key := proxyImportKey(clean, true)
 		if _, exists := seen[key]; exists {
 			continue
 		}
