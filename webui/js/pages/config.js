@@ -86,8 +86,6 @@ function renderProbeResults(results) {
 
 async function probeProxies() {
   const button = $("#proxy-probe");
-  const config = store.get("config") || {};
-  const total = (config.proxies?.length || 0) + Number(config.proxyfile_count || 0);
   let completed = 0;
   let failed = false;
   let hasResults = false;
@@ -99,25 +97,26 @@ async function probeProxies() {
   $("#proxy-probe-summary").textContent = button.textContent;
   await new Promise((resolve) => requestAnimationFrame(resolve));
   try {
-    if (!total) {
-      const result = await api("/api/proxies/probe", { method: "POST", body: JSON.stringify({ indexes: [] }) });
-      renderProbeResults(result.results || []);
-      hasResults = true;
-    } else {
-      const batchSize = 8;
-      const byIndex = new Map();
-      for (let start = 0; start < total; start += batchSize) {
-        const indexes = Array.from({ length: Math.min(batchSize, total - start) }, (_, offset) => start + offset);
-        const result = await api("/api/proxies/probe", { method: "POST", body: JSON.stringify({ indexes, channel: $("#proxy-probe-channel").value }) });
-        for (const item of result.results || []) byIndex.set(item.index, item);
-        completed = Math.min(start + indexes.length, total);
-        renderProbeResults([...byIndex.values()].sort((a, b) => a.index - b.index));
-        hasResults = true;
-        button.textContent = `${t("检测中…", "config.proxy.probing")} ${completed}/${total}`;
-        $("#proxy-probe-summary").textContent = button.textContent;
+    const batchSize = 8;
+    const byIndex = new Map();
+    // Walk fixed-size batches until the server reports an out-of-range index,
+    // so the pool can be probed without knowing its size up front.
+    for (let start = 0; ; start += batchSize) {
+      const indexes = Array.from({ length: batchSize }, (_, offset) => start + offset);
+      const result = await api("/api/proxies/probe", { method: "POST", body: JSON.stringify({ indexes, channel: $("#proxy-probe-channel").value }) });
+      const items = result.results || [];
+      const exhausted = items.some((item) => item.error === "invalid proxy index");
+      for (const item of items) {
+        if (item.error !== "invalid proxy index") byIndex.set(item.index, item);
       }
-      probeComplete = true;
+      completed = byIndex.size;
+      renderProbeResults([...byIndex.values()].sort((a, b) => a.index - b.index));
+      hasResults = true;
+      button.textContent = `${t("检测中…", "config.proxy.probing")} ${completed}`;
+      $("#proxy-probe-summary").textContent = button.textContent;
+      if (exhausted) break;
     }
+    probeComplete = true;
   } catch (error) {
     failed = true;
     $("#proxy-probe-summary").textContent = `${t("测活失败", "config.proxy.probeFailed")}: ${error.message}`;

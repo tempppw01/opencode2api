@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 
@@ -250,10 +249,6 @@ func (g *Gateway) probeAttempt(parent context.Context, client *http.Client, base
 	if err != nil {
 		result.reason = "transport_error"
 		result.detail = err.Error()
-		if status := proxyConnectStatus(err.Error()); status != 0 {
-			result.status = status
-			result.reason = fmt.Sprintf("http_%d", status)
-		}
 		if overWARP && errors.Is(err, errWARPUnavailable) {
 			// No exit could be acquired, so no request reached the upstream.
 			result.attempted = false
@@ -334,30 +329,6 @@ func (g *Gateway) probeAttempt(parent context.Context, client *http.Client, base
 		}
 	}
 	return result
-}
-
-var proxyConnectStatusPattern = regexp.MustCompile(`(?i)proxyconnect[^:]*:\s*(?:response status code\s*)?(\d{3})\b|CONNECT:\s*(\d{3})\b`)
-
-// proxyConnectStatus extracts the code an HTTP proxy returned for a CONNECT
-// request. Go surfaces those as transport errors, so the status would
-// otherwise be invisible to the WebUI.
-func proxyConnectStatus(message string) int {
-	match := proxyConnectStatusPattern.FindStringSubmatch(message)
-	if match == nil {
-		return 0
-	}
-	value := match[1]
-	if value == "" {
-		value = match[2]
-	}
-	status := 0
-	for _, digit := range value {
-		status = status*10 + int(digit-'0')
-	}
-	if status < 100 || status > 599 {
-		return 0
-	}
-	return status
 }
 
 // IsModelUnavailable reports whether a 400, 404, 410 or 422 error body says
