@@ -1,367 +1,52 @@
 package admin
 
 import (
-	"context"
-	"errors"
-	"fmt"
 	"net/http"
-	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
-	"time"
 
 	"opencode2api/internal/config"
-	"opencode2api/internal/gateway"
 	"opencode2api/internal/httpx"
 )
 
-func (a *Server) handleClearConfiguredProxies(w http.ResponseWriter, _ *http.Request) {
-	removed := len(a.manager.Config().Proxies)
-	_, err := a.manager.Update(func(cfg *config.Config) error {
-		removed = len(cfg.Proxies)
-		cfg.Proxies = nil
-		return nil
-	})
-	if err != nil {
-		writeAdminError(w, http.StatusBadRequest, "proxy_clear_failed", err.Error())
-		return
-	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"removed": removed, "config": a.configView()})
-}
-
-func mergeProxyImport(path string, proxies []string) ([]byte, int, error) {
-	current, err := config.ReadProxyFile(path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, 0, fmt.Errorf("read Proxy File: %w", err)
-	}
-	original, err := os.ReadFile(path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, 0, fmt.Errorf("read Proxy File: %w", err)
-	}
-	seen := make(map[string]struct{}, len(current)+len(proxies))
-	for _, value := range current {
-		clean, pool := config.ParseProxyEntry(value)
-		seen[proxyImportKey(clean, pool)] = struct{}{}
-	}
-	var additions []string
-	for _, value := range proxies {
-		value = strings.TrimSpace(value)
-		if !strings.Contains(value, "://") {
-			value = "http://" + value
-		}
-		if value == "" || !validImportedProxy(value) {
-			return nil, 0, fmt.Errorf("invalid proxy entry: %s", config.RedactURL(value))
-		}
-		clean, _ := config.ParseProxyEntry(value)
-		value = clean + "#pool"
-		key := proxyImportKey(clean, true)
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		seen[key] = struct{}{}
-		additions = append(additions, value)
-	}
-	if len(additions) == 0 {
-		return original, 0, nil
-	}
-	if err := replaceProxyFile(path, original, additions); err != nil {
-		return nil, 0, fmt.Errorf("write Proxy File: %w", err)
-	}
-	updated, err := os.ReadFile(path)
-	return updated, len(additions), err
-}
-
-func (a *Server) handleImportProxies(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		Proxies []string `json:"proxies"`
-	}
+func (a *Server) handleCheckProxy(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	var input SecretInput
 	if err := decodeAdminJSON(w, r, &input); err != nil {
-		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		writeAdminError(w, http.StatusBadRequest, "invalid_request", "provide exactly one proxy id or value")
 		return
 	}
-	if len(input.Proxies) == 0 {
-		writeAdminError(w, http.StatusBadRequest, "empty_import", "no valid proxy entries were provided")
+	input.ID = strings.TrimSpace(input.ID)
+	input.Value = strings.TrimSpace(input.Value)
+	if (input.ID == "") == (input.Value == "") || len(input.Value) > 16<<10 {
+		writeAdminError(w, http.StatusBadRequest, "invalid_proxy", "provide exactly one proxy id or value of at most 16 KiB")
 		return
 	}
-	var added int
-	_, err := a.manager.Update(func(cfg *config.Config) error {
-		path := filepath.Join(filepath.Dir(a.manager.ConfigPath()), "proxies.txt")
-		var mergeErr error
-		_, added, mergeErr = mergeProxyImport(path, input.Proxies)
-		if mergeErr != nil {
-			return mergeErr
+	value := input.Value
+	if input.ID != "" {
+		for _, existing := range a.manager.Config().Proxies {
+			if config.Fingerprint(existing) == input.ID {
+				value = existing
+				break
+			}
 		}
-		cfg.ProxyFile = "proxies.txt"
-		return nil
-	})
-	if err != nil {
-		writeAdminError(w, http.StatusBadRequest, "proxy_import_failed", err.Error())
-		return
-	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"added": added, "config": a.configView()})
-}
-
-func proxyImportKey(value string, pool bool) string {
-	return strings.ToLower(value) + fmt.Sprintf("#pool=%t", pool)
-}
-
-func proxyDeleteKey(value string) string {
-	clean, pool := config.ParseProxyEntry(value)
-	return strings.ToLower(clean) + fmt.Sprintf("#pool=%t", pool)
-}
-
-func uniqueRuntimeProxyEntries(values []string) []string {
-	seenStatic := make(map[string]struct{}, len(values))
-	seenPool := make(map[string]struct{}, len(values))
-	unique := make([]string, 0, len(values))
-	for _, value := range values {
-		clean, pool := config.ParseProxyEntry(value)
-		seen := seenStatic
-		if pool {
-			seen = seenPool
-		}
-		if _, exists := seen[clean]; exists {
-			continue
-		}
-		seen[clean] = struct{}{}
-		unique = append(unique, value)
-	}
-	if len(unique) == 0 {
-		return []string{"direct"}
-	}
-	return unique
-}
-
-func replaceProxyFile(path string, original []byte, additions []string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	mode := os.FileMode(0o644)
-	if info, err := os.Stat(path); err == nil {
-		mode = info.Mode().Perm()
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	temp, err := os.CreateTemp(filepath.Dir(path), ".proxies-import-*.tmp")
-	if err != nil {
-		return err
-	}
-	tempPath := temp.Name()
-	defer os.Remove(tempPath)
-	if err := temp.Chmod(mode); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	content := string(original)
-	if len(content) > 0 && !strings.HasSuffix(content, "\n") {
-		content += "\n"
-	}
-	content += strings.Join(additions, "\n") + "\n"
-	if _, err := temp.WriteString(content); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	if err := temp.Sync(); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tempPath, path)
-}
-
-func validImportedProxy(value string) bool {
-	clean, _ := config.ParseProxyEntry(value)
-	u, err := url.Parse(clean)
-	return err == nil && u.Hostname() != "" && u.Port() != "" && (u.Scheme == "http" || u.Scheme == "https" || u.Scheme == "socks5" || u.Scheme == "socks5h")
-}
-
-func (a *Server) handleProbeProxies(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		Indexes []int  `json:"indexes"`
-		Channel string `json:"channel"`
-	}
-	if err := decodeAdminJSON(w, r, &input); err != nil {
-		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-	results := a.manager.ProbeProxies(ctx, 60*time.Second, input.Indexes, input.Channel)
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"results": results})
-}
-
-type deleteProxyInput struct {
-	Indexes []int `json:"indexes"`
-}
-
-func (a *Server) handleDeleteProxies(w http.ResponseWriter, r *http.Request) {
-	var input deleteProxyInput
-	if err := decodeAdminJSON(w, r, &input); err != nil {
-		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	if len(input.Indexes) == 0 {
-		writeAdminError(w, http.StatusBadRequest, "empty_selection", "select at least one proxy node")
-		return
-	}
-	cfgSnapshot := a.manager.Config()
-	proxies := cfgSnapshot.RuntimeProxies()
-	results := make([]gateway.ProxyProbeResult, len(proxies))
-	for index, proxy := range proxies {
-		results[index] = gateway.ProxyProbeResult{Index: index, Address: config.RedactURL(proxy)}
-	}
-	if len(results) == 0 {
-		writeAdminError(w, http.StatusConflict, "no_proxies", "no proxy nodes are configured")
-		return
-	}
-	selected := make(map[int]struct{}, len(input.Indexes))
-	for _, index := range input.Indexes {
-		if index < 0 || index >= len(results) {
-			writeAdminError(w, http.StatusBadRequest, "invalid_selection", "proxy selection is stale; run the check again")
-			return
-		}
-		selected[index] = struct{}{}
-	}
-	for _, result := range results {
-		if _, ok := selected[result.Index]; ok && strings.TrimSpace(result.Address) == "direct" {
-			writeAdminError(w, http.StatusBadRequest, "direct_proxy_selected", "the direct route cannot be deleted from the bulk cleanup")
+		if value == "" {
+			writeAdminError(w, http.StatusBadRequest, "unknown_proxy_id", "proxy id is unknown or stale; reload the configuration")
 			return
 		}
 	}
-
-	var removed int
-	var stagedFile, targetFile string
-	_, err := a.manager.Update(func(cfg *config.Config) error {
-		fileProxies := []string{}
-		path := ""
-		if cfg.ProxyFile != "" {
-			path = cfg.ProxyFile
-			if !filepath.IsAbs(path) {
-				path = filepath.Join(filepath.Dir(a.manager.ConfigPath()), path)
-			}
-			loaded, err := config.ReadProxyFile(path)
-			if err != nil {
-				return err
-			}
-			fileProxies = loaded
-		}
-		combined := append(append([]string(nil), cfg.Proxies...), fileProxies...)
-		current := uniqueRuntimeProxyEntries(combined)
-		if len(current) != len(results) {
-			return errors.New("proxy list changed during check; refresh the list and try again")
-		}
-		for index, proxy := range current {
-			if config.RedactURL(proxy) != results[index].Address {
-				return errors.New("proxy list changed during check; refresh the list and try again")
-			}
-		}
-		selectedKeys := make(map[string]struct{}, len(selected))
-		for index := range selected {
-			selectedKeys[proxyDeleteKey(current[index])] = struct{}{}
-		}
-		fileSelected := make(map[int]struct{})
-		for index, proxy := range fileProxies {
-			if _, drop := selectedKeys[proxyDeleteKey(proxy)]; drop {
-				fileSelected[index] = struct{}{}
-			}
-		}
-		if len(fileSelected) > 0 {
-			var err error
-			stagedFile, err = stageProxyFile(path, fileProxies, fileSelected)
-			if err != nil {
-				return err
-			}
-			targetFile = path
-			removed += len(fileSelected)
-		}
-		kept := make([]string, 0, len(cfg.Proxies))
-		for _, value := range cfg.Proxies {
-			if _, drop := selectedKeys[proxyDeleteKey(value)]; drop {
-				removed++
-				continue
-			}
-			kept = append(kept, value)
-		}
-		cfg.Proxies = kept
-		return nil
-	})
-	if err != nil {
-		if stagedFile != "" {
-			_ = os.Remove(stagedFile)
-		}
-		writeAdminError(w, http.StatusBadRequest, "delete_failed", err.Error())
+	if err := config.ValidateProxyEntry(value); err != nil {
+		writeAdminError(w, http.StatusBadRequest, "invalid_proxy", "proxy must be direct or an HTTP, HTTPS, SOCKS5 or SOCKS5H URL")
 		return
 	}
-	if stagedFile != "" {
-		if err := os.Rename(stagedFile, targetFile); err != nil {
-			writeAdminError(w, http.StatusInternalServerError, "proxy_file_commit_failed", "configuration was saved, but the proxy file could not be replaced")
-			return
-		}
+	select {
+	case a.proxyChecks <- struct{}{}:
+		defer func() { <-a.proxyChecks }()
+	case <-r.Context().Done():
+		return
+	default:
+		w.Header().Set("Retry-After", "1")
+		writeAdminError(w, http.StatusTooManyRequests, "proxy_checks_busy", "too many proxy checks; retry shortly")
+		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"removed": removed, "config": a.configView()})
-}
-
-func stageProxyFile(path string, proxies []string, selected map[int]struct{}) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	lines := strings.Split(string(data), "\n")
-	kept := make([]string, 0, len(lines))
-	proxyIndex := 0
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(strings.TrimPrefix(strings.TrimSuffix(line, "\r"), "\ufeff"))
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, ";") || strings.HasPrefix(trimmed, "//") {
-			kept = append(kept, line)
-			continue
-		}
-		if proxyIndex >= len(proxies) {
-			return "", errors.New("proxy file changed during check; refresh the list and try again")
-		}
-		lineProxy := strings.TrimSpace(config.StripProxyLineComment(strings.TrimPrefix(strings.TrimSpace(strings.TrimSuffix(line, "\r")), "\ufeff")))
-		if config.RedactURL(lineProxy) != config.RedactURL(proxies[proxyIndex]) {
-			return "", errors.New("proxy file changed during check; refresh the list and try again")
-		}
-		if _, drop := selected[proxyIndex]; drop {
-			proxyIndex++
-			continue
-		}
-		kept = append(kept, line)
-		proxyIndex++
-	}
-	if proxyIndex != len(proxies) {
-		return "", errors.New("proxy file changed during check; refresh the list and try again")
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return "", err
-	}
-	temp, err := os.CreateTemp(filepath.Dir(path), ".proxies-*.tmp")
-	if err != nil {
-		return "", err
-	}
-	tempPath := temp.Name()
-	if err := temp.Chmod(info.Mode().Perm()); err != nil {
-		_ = temp.Close()
-		_ = os.Remove(tempPath)
-		return "", err
-	}
-	if _, err := temp.WriteString(strings.Join(kept, "\n")); err != nil {
-		_ = temp.Close()
-		_ = os.Remove(tempPath)
-		return "", err
-	}
-	if err := temp.Sync(); err != nil {
-		_ = temp.Close()
-		_ = os.Remove(tempPath)
-		return "", err
-	}
-	if err := temp.Close(); err != nil {
-		_ = os.Remove(tempPath)
-		return "", err
-	}
-	return tempPath, nil
+	httpx.WriteJSON(w, http.StatusOK, a.manager.CheckProxy(r.Context(), value))
 }

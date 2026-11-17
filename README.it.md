@@ -53,7 +53,7 @@ go build -o opencode2api ./cmd/opencode2api
 Prima di avviare il servizio, modifica `config.json`:
 
 1. Sostituisci `server_keys` con una tua API key locale.
-2. Configura le chiavi Zen o Go. In alternativa, imposta `anonymous: true` e lascia vuoti entrambi gli array delle chiavi upstream.
+2. Prima dell'avvio, inserisci una Zen API Key (consigliata) in `zen_keys` oppure una chiave Go in `go_keys`. L'esempio disabilita l'accesso anonimo (`anonymous: false`) e lascia vuoti entrambi gli array; anche una connessione Go in abbonamento già salvata soddisfa il requisito. Il canale anonimo potrebbe essere fortemente bloccato a monte: preferisci una Zen API Key.
 3. Sostituisci `webui.password`. La configurazione di esempio abilita la WebUI con l'utente `admin`.
 
 ```bash
@@ -260,7 +260,7 @@ L'iniezione dipende dal protocollo: i messaggi system e developer di Chat vengon
 
 ### Normalizzazione degli strumenti
 
-Su ogni richiesta di un modello gratuito già normalizzata il gateway rinomina ogni strumento nominato del client in `clint_<name>` — i caratteri fuori da `A-Za-z0-9_-` diventano `_`, i nomi sono limitati a 64 byte e le collisioni ricevono il suffisso `_2`, `_3`, … — e aggiunge l'intero set ufficiale del canale: le definizioni 1.x (`bash`, `edit`, `glob`, `grep`, `read`, `skill`, `task`, `todowrite`, `webfetch`, `websearch`, `write`) su `/zen` e il set di 13 strumenti 2.x su `/inference` e `/zen/go`. Le richieste senza `tools`, con un array vuoto o con il vecchio array `functions` ricevono lo stesso set; `tool_choice`, il vecchio `function_call` e la cronologia delle tool call vengono riscritti di conseguenza. Gli strumenti integrati di Responses e quelli server di Anthropic restano invariati.
+Su ogni richiesta di un modello gratuito già normalizzata il gateway rinomina ogni strumento nominato del client in un nome opaco fatto di un prefisso di namespace più i primi 12 caratteri esadecimali dello SHA-256 del nome dello strumento — i caratteri fuori da `A-Za-z0-9_-` diventano `_`, i nomi sono limitati a 64 byte e le collisioni ricevono il suffisso `_2`, `_3`, … — e aggiunge l'intero set ufficiale del canale: le definizioni 1.x (`bash`, `edit`, `glob`, `grep`, `read`, `skill`, `task`, `todowrite`, `webfetch`, `websearch`, `write`) su `/zen` e il set di 13 strumenti 2.x su `/inference` e `/zen/go`. Le richieste senza `tools`, con un array vuoto o con il vecchio array `functions` ricevono lo stesso set; `tool_choice`, il vecchio `function_call` e la cronologia delle tool call vengono riscritti di conseguenza. Gli strumenti integrati di Responses e quelli server di Anthropic restano invariati.
 
 Le risposte vengono riportate ai nomi dichiarati dal client, sia in streaming sia non, incluso un nome Chat suddiviso su più chunk. Se l'upstream chiama uno strumento ufficiale che il client non ha dichiarato, il nome passa invariato: il gateway non riproduce né nasconde le chiamate ufficiali.
 

@@ -1,250 +1,16 @@
 // Page: 配置中心 — masked config editing with validation, hot reload and reveal.
-import { api } from "../api.js";
-import { loadConfig, loadDebugModels } from "../data.js";
+import { api, hasSession } from "../api.js";
 import * as store from "../store.js";
 import { t, onChange } from "../i18n.js";
-import { $, $$, bindTabs, confirmDialog, el, openDialog, toast } from "../ui.js";
-
-let probeResults = [];
-let probeComplete = false;
-
-function selectedProbeIndexes() {
-  return [...$("#proxy-probe-results").querySelectorAll("input[data-index]:checked")].map((input) => Number(input.dataset.index));
-}
-
-function syncProbeControls() {
-  const ready = probeResults.length > 0;
-  for (const selector of ["#proxy-select-all", "#proxy-select-timeout"]) $(selector).disabled = !ready;
-  $("#proxy-delete").disabled = !selectedProbeIndexes().length;
-  $("#proxy-keep-200").disabled = !probeComplete || !ready;
-}
-
-function selectProbeResults() {
-  const changed = document.activeElement?.id;
-  const all = $("#proxy-select-all").checked;
-  const timeout = $("#proxy-select-timeout").checked;
-  const selectedStatus = changed?.startsWith("proxy-select-status-") ? Number(changed.slice("proxy-select-status-".length)) : null;
-  $$("#proxy-probe-results input[data-index]").forEach((input) => {
-    const result = probeResults[Number(input.dataset.index)];
-    if (changed === "proxy-select-all") input.checked = all;
-    else if (changed === "proxy-select-timeout") input.checked = timeout ? Boolean(result?.timeout) || input.checked : !result?.timeout && input.checked;
-    else if (selectedStatus !== null) input.checked = $("#" + CSS.escape(changed)).checked ? result?.status === selectedStatus || input.checked : result?.status !== selectedStatus && input.checked;
-  });
-  syncProbeControls();
-}
-
-function renderProbeResults(results) {
-  probeResults = results || [];
-  for (const selector of ["#proxy-select-all", "#proxy-select-timeout"]) $(selector).checked = false;
-  const statusFilters = $("#proxy-status-filters");
-  statusFilters.replaceChildren();
-  const statuses = [...new Set(probeResults.map((result) => Number(result.status)).filter((status) => status >= 400 && status <= 599))].sort((a, b) => a - b);
-  for (const status of statuses) {
-    const id = `proxy-select-status-${status}`;
-    const checkbox = el("input", { id, type: "checkbox", disabled: !probeResults.length });
-    checkbox.addEventListener("change", selectProbeResults);
-    statusFilters.append(el("label", { class: "check" }, [checkbox, el("span", { text: String(status) })]));
-  }
-  const body = $("#proxy-probe-results");
-  body.replaceChildren();
-  if (!probeResults.length) {
-    probeComplete = false;
-    body.append(el("tr", {}, el("td", { class: "empty", colspan: 7, text: t("没有代理节点", "config.proxy.none") })));
-    $("#proxy-probe-summary").textContent = t("没有可检测的代理节点", "config.proxy.none");
-    syncProbeControls();
-    return;
-  }
-  let ok = 0;
-  for (const result of probeResults) {
-    const statusOk = result.status >= 200 && result.status < 400;
-    if (statusOk && !result.error) ok++;
-    const checkbox = el("input", { type: "checkbox", dataset: { index: result.index }, "aria-label": `${t("选择节点", "config.proxy.selectNode")} ${result.address}` });
-    checkbox.addEventListener("change", () => {
-      $("#proxy-select-all").checked = false;
-      syncProbeControls();
-    });
-    const status = result.status ? String(result.status) : result.error ? t("无 HTTP 响应", "config.proxy.noHttpResponse") : "—";
-    const issue = result.timeout ? t("超时", "config.proxy.timeout") : result.error ? t("连接失败", "config.proxy.connectError") : statusOk ? t("可达", "config.proxy.reachable") : t("HTTP 响应", "config.proxy.httpResponse");
-    const tone = statusOk && !result.error ? "ok" : result.timeout || result.error || result.status >= 400 ? "bad" : "warn";
-    const row = el("tr", {}, [
-      el("td", {}, checkbox),
-      el("td", { class: "mono", text: result.address }),
-      el("td", { text: result.channel || "—" }),
-      el("td", { class: "mono", text: result.model || "—" }),
-      el("td", { class: `num ${tone}`, text: status }),
-      el("td", { class: "num", text: `${result.duration_ms} ms` }),
-      el("td", { class: tone, title: result.detail || "", text: result.error ? `${issue} (${result.error}${result.detail ? `: ${result.detail}` : ""})` : issue }),
-    ]);
-    body.append(row);
-  }
-  $("#proxy-probe-summary").textContent = t(
-    `检测完成：${probeResults.length} 个节点，可达 ${ok} 个，异常 ${probeResults.length - ok} 个`,
-    "config.proxy.summary", probeResults.length, ok, probeResults.length - ok,
-  );
-  syncProbeControls();
-}
-
-async function probeProxies() {
-  const button = $("#proxy-probe");
-  let completed = 0;
-  let failed = false;
-  let hasResults = false;
-  probeComplete = false;
-  button.disabled = true;
-  button.classList.add("is-loading");
-  button.setAttribute("aria-busy", "true");
-  button.textContent = `${t("检测中…", "config.proxy.probing")} 0`;
-  $("#proxy-probe-summary").textContent = button.textContent;
-  await new Promise((resolve) => requestAnimationFrame(resolve));
-  try {
-    const batchSize = 8;
-    const byIndex = new Map();
-    // Walk fixed-size batches until the server reports an out-of-range index,
-    // so the pool can be probed without knowing its size up front.
-    for (let start = 0; ; start += batchSize) {
-      const indexes = Array.from({ length: batchSize }, (_, offset) => start + offset);
-      const result = await api("/api/proxies/probe", { method: "POST", body: JSON.stringify({ indexes, channel: $("#proxy-probe-channel").value }) });
-      const items = result.results || [];
-      const exhausted = items.some((item) => item.error === "invalid proxy index");
-      for (const item of items) {
-        if (item.error !== "invalid proxy index") byIndex.set(item.index, item);
-      }
-      completed = byIndex.size;
-      renderProbeResults([...byIndex.values()].sort((a, b) => a.index - b.index));
-      hasResults = true;
-      button.textContent = `${t("检测中…", "config.proxy.probing")} ${completed}`;
-      $("#proxy-probe-summary").textContent = button.textContent;
-      if (exhausted) break;
-    }
-    probeComplete = true;
-  } catch (error) {
-    failed = true;
-    $("#proxy-probe-summary").textContent = `${t("测活失败", "config.proxy.probeFailed")}: ${error.message}`;
-    toast(error.message, true);
-  } finally {
-    button.disabled = false;
-    button.classList.remove("is-loading");
-    button.removeAttribute("aria-busy");
-    button.textContent = t("一键测活", "config.proxy.probe");
-    if (failed && hasResults) $("#proxy-probe-summary").textContent = `${t("检测已中断，已显示部分结果", "config.proxy.probeInterrupted")} (${completed})`;
-    syncProbeControls();
-  }
-}
-
-async function keepOnlyHTTP200() {
-  if (!probeComplete) return;
-  const keep = probeResults.filter((result) => result.status === 200 && !result.error);
-  const remove = probeResults.filter((result) => !(result.status === 200 && !result.error));
-  const indexes = remove.map((result) => result.index);
-  if (!indexes.length) {
-    toast(t("所有代理均返回 HTTP 200，无需清理", "config.proxy.keep200None"));
-    return;
-  }
-  if (!(await confirmDialog({
-    title: t("仅保留 HTTP 200", "config.proxy.keep200"),
-    message: t(`测活结果：保留 ${keep.length} 个 HTTP 200 节点，删除 ${remove.length} 个其余节点。`, "config.proxy.keep200Confirm", keep.length, remove.length),
-    danger: true,
-    confirmLabel: t("删除非 200 节点", "config.proxy.keep200Action"),
-  }))) return;
-  const button = $("#proxy-keep-200");
-  button.disabled = true;
-  button.setAttribute("aria-busy", "true");
-  try {
-    const result = await api("/api/proxies/delete", { method: "POST", body: JSON.stringify({ indexes }) });
-    store.set("config", result.config);
-    $("#proxies-new").value = "";
-    renderProbeResults([]);
-    toast(t("已保留 {0} 个 HTTP 200 节点，删除 {1} 个其他代理配置项", "config.proxy.keep200Done", keep.length, result.removed));
-  } catch (error) {
-    $("#proxy-probe-summary").textContent = `${t("删除失败", "config.proxy.deleteFailed")}: ${error.message}`;
-    toast(error.message, true);
-  } finally {
-    button.removeAttribute("aria-busy");
-    syncProbeControls();
-  }
-}
-
-async function deleteSelectedProxies() {
-  const indexes = selectedProbeIndexes();
-  if (!indexes.length) return;
-  if (!(await confirmDialog({ title: t("删除代理节点", "config.proxy.confirmTitle"), message: t(`确定删除所选的 ${indexes.length} 个代理节点？`, "config.proxy.confirm", indexes.length), danger: true, confirmLabel: t("删除", "common.remove") }))) return;
-  try {
-    const result = await api("/api/proxies/delete", { method: "POST", body: JSON.stringify({ indexes }) });
-    store.set("config", result.config);
-    $("#proxies-new").value = "";
-    renderProbeResults([]);
-    toast(t(`已删除 ${result.removed} 个代理节点`, "config.proxy.deleted", result.removed));
-  } catch (error) {
-    $("#proxy-probe-summary").textContent = `${t("删除失败", "config.proxy.deleteFailed")}: ${error.message}`;
-    toast(error.message, true);
-  }
-}
-
-async function clearConfiguredProxies() {
-  const count = $("#proxies-chips").children.length;
-  if (!(await confirmDialog({
-    title: t("清空 WebUI 代理", "config.proxy.clearConfigured"),
-    message: t(`确定清空配置中心中的 ${count} 个代理？Proxy File 和 proxies.txt 不会被修改。`, "config.proxy.clearConfiguredConfirm", count),
-    danger: true,
-    confirmLabel: t("清空", "config.proxy.clearAction"),
-  }))) return;
-  const button = $("#proxy-clear-configured");
-  button.disabled = true;
-  button.setAttribute("aria-busy", "true");
-  toast(t("正在清空 WebUI 代理…", "config.proxy.clearConfiguredWorking"));
-  try {
-    const result = await api("/api/proxies/configured", { method: "DELETE" });
-    store.set("config", result.config);
-    $("#proxies-new").value = "";
-    renderProbeResults([]);
-    toast(t("已清空 {0} 个 WebUI 代理；Proxy File 未修改", "config.proxy.clearConfiguredDone", result.removed));
-  } catch (error) {
-    toast(error.message, true);
-  } finally {
-    button.disabled = false;
-    button.removeAttribute("aria-busy");
-  }
-}
-
-async function importProxyFile(file) {
-  if (!file) return;
-  try {
-    const text = await file.text();
-    const imported = [];
-    let skipped = 0;
-    for (let line of text.replace(/^\uFEFF/, "").split(/\r?\n/)) {
-      line = line.trim();
-      if (!line || line.startsWith("#") || line.startsWith(";") || line.startsWith("//")) continue;
-      if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(line)) line = `http://${line}`;
-      try {
-        const url = new URL(line);
-        if (!["http:", "https:", "socks5:", "socks5h:"].includes(url.protocol) || !url.hostname || !url.port) throw new Error("invalid proxy");
-      } catch {
-        skipped++;
-        continue;
-      }
-      imported.push(line);
-    }
-    if (!imported.length) {
-      toast(t(`没有新增代理（跳过无效行 ${skipped} 行）`, "config.proxy.importEmpty", skipped), skipped > 0);
-      return;
-    }
-    const result = await api("/api/proxies/import", { method: "POST", body: JSON.stringify({ proxies: imported }) });
-    store.set("config", result.config);
-    $("#proxies-new").value = "";
-    toast(t(`已将 ${result.added} 个代理合并到 proxies.txt（跳过无效行 ${skipped} 行）`, "config.proxy.imported", result.added, skipped));
-  } catch (error) {
-    toast(error.message || t("读取文件失败", "config.proxy.importError"), true);
-  } finally {
-    $("#proxy-import-file").value = "";
-  }
-}
+import { $, $$, bindTabs, el, openDialog, toast } from "../ui.js";
+import { fillProxies, initProxies, lockProxies, proxyInputs, resetProxies, stopChecks } from "./proxies.js";
 
 // A long proxy list is rendered collapsed: the first CHIP_RENDER_LIMIT chips
 // plus a toggle. A single flex-wrap row with thousands of chips is what froze
 // the config page on large pools.
 const CHIP_RENDER_LIMIT = 100;
 const expandedChips = new Set();
+let mutation = null;
 
 function renderChips(name) {
   const host = $(`#${name}-chips`);
@@ -296,6 +62,7 @@ function renderRestartNotice(value) {
 }
 
 function secretInputs(name) {
+  if (name === "proxies") return proxyInputs();
   const kept = [...$(`#${name}-chips`).children]
     .filter((node) => node.dataset.id !== undefined)
     .map((node) => ({ id: node.dataset.id }));
@@ -345,14 +112,34 @@ function fillConfig(value) {
   $("#c-level").value = value.logging.level;
   $("#c-ring").value = value.logging.ring_size;
   $("#c-dump-bodies").checked = !!value.logging.dump_request_bodies;
-  ["server_keys", "zen_keys", "go_keys", "proxies"].forEach(renderChips);
+  ["server_keys", "zen_keys", "go_keys"].forEach(renderChips);
+  fillProxies(value.proxies || []);
   renderRestartNotice(value);
+}
+
+function lockConfig(value) {
+  lockProxies(value);
+  $$("#config-form .sticky-actions button").forEach((button) => (button.disabled = value));
+}
+
+function currentMutation(operation) {
+  return mutation === operation && hasSession();
+}
+
+async function refreshDebug(operation) {
+  const value = await api("/api/debug/models", { signal: operation.controller.signal });
+  if (!currentMutation(operation)) return;
+  if (value.last_inference) store.set("lastPlayground", value.last_inference);
+  store.set("debug", value);
 }
 
 async function save(event) {
   event.preventDefault();
   const current = store.get("config");
-  if (!current) return;
+  if (!current || mutation || !hasSession()) return;
+  const operation = { controller: new AbortController() };
+  mutation = operation;
+  lockConfig(true);
   try {
     const update = {
       listen: $("#c-listen").value,
@@ -369,7 +156,7 @@ async function save(event) {
       proxies: secretInputs("proxies"),
       proxyfile: $("#c-proxyfile").value,
       prefer: $("#c-prefer").value,
-      upstream: { zen: $("#c-up-zen").value, go: $("#c-up-go").value },
+      upstream: { ...current.upstream, zen: $("#c-up-zen").value, go: $("#c-up-go").value },
       retry: { max_attempts: numberValue("#c-attempts"), timeout_seconds: numberValue("#c-timeout") },
       models: {
         refresh_seconds: numberValue("#c-refresh"),
@@ -403,12 +190,17 @@ async function save(event) {
         session_ttl_minutes: numberValue("#c-session"),
       },
     };
-    const result = await api("/api/config", { method: "PUT", body: JSON.stringify(update) });
+    const result = await api("/api/config", {
+      method: "PUT", body: JSON.stringify(update), signal: operation.controller.signal,
+    });
+    if (!currentMutation(operation)) return;
+    fillProxies(result.config.proxies || [], true);
     store.set("config", result.config);
-    ["server_keys", "zen_keys", "go_keys", "proxies"].forEach(
+    ["server_keys", "zen_keys", "go_keys"].forEach(
       (name) => ($(`#${name}-new`).value = ""),
     );
-    await loadDebugModels();
+    await refreshDebug(operation);
+    if (!currentMutation(operation)) return;
     toast(
       result.result.restart_required
         ? t(
@@ -419,22 +211,43 @@ async function save(event) {
         : t("配置已保存并立即应用", "toast.config.saved"),
     );
   } catch (error) {
-    toast(error.message, true);
+    if (currentMutation(operation) && error.name !== "AbortError") toast(error.message, true);
+  } finally {
+    if (mutation === operation) {
+      mutation = null;
+      lockConfig(false);
+    }
   }
 }
 
 async function reload() {
+  if (mutation || !hasSession()) return;
+  const operation = { controller: new AbortController() };
+  mutation = operation;
+  lockConfig(true);
   try {
-    const result = await api("/api/config/reload", { method: "POST", body: "{}" });
-    await loadConfig();
-    await loadDebugModels();
+    const result = await api("/api/config/reload", {
+      method: "POST", body: "{}", signal: operation.controller.signal,
+    });
+    if (!currentMutation(operation)) return;
+    const value = await api("/api/config", { signal: operation.controller.signal });
+    if (!currentMutation(operation)) return;
+    fillProxies(value.proxies || [], true);
+    store.set("config", value);
+    await refreshDebug(operation);
+    if (!currentMutation(operation)) return;
     toast(
       result.restart_required
         ? t("磁盘配置已重载，监听字段需重启", "toast.config.reloadedRestart")
         : t("磁盘配置已重载", "toast.config.reloaded"),
     );
   } catch (error) {
-    toast(error.message, true);
+    if (currentMutation(operation) && error.name !== "AbortError") toast(error.message, true);
+  } finally {
+    if (mutation === operation) {
+      mutation = null;
+      lockConfig(false);
+    }
   }
 }
 
@@ -480,19 +293,20 @@ export default {
   id: "config",
   title: "配置中心",
   sub: "验证后原子保存，并热应用可变字段。",
+  hide: stopChecks,
+  reset() {
+    mutation?.controller.abort();
+    mutation = null;
+    lockConfig(false);
+    resetProxies();
+  },
   init() {
     store.on("config", fillConfig);
-    bindTabs($("#page-config"));
+    initProxies();
+    bindTabs($("#page-config"), (id) => { if (id !== "proxies") stopChecks(); });
     $("#config-form").addEventListener("submit", save);
     $("#reload-config").addEventListener("click", reload);
     $("#reveal").addEventListener("click", reveal);
-    $("#proxy-probe").addEventListener("click", probeProxies);
-    $("#proxy-delete").addEventListener("click", deleteSelectedProxies);
-    $("#proxy-keep-200").addEventListener("click", keepOnlyHTTP200);
-    $("#proxy-clear-configured").addEventListener("click", clearConfiguredProxies);
-    $("#proxy-import").addEventListener("click", () => $("#proxy-import-file").click());
-    $("#proxy-import-file").addEventListener("change", (event) => importProxyFile(event.target.files?.[0]));
-    ["#proxy-select-all", "#proxy-select-timeout"].forEach((selector) => $(selector).addEventListener("change", selectProbeResults));
     onChange(() => {
       const value = store.get("config");
       if (value) renderRestartNotice(value);

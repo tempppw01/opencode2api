@@ -1,18 +1,64 @@
-# 管理控制台：模型轮转、Go 额度与 API Key
+# 管理控制台：模型轮转、Go 额度、API Key 与代理
 
-本文说明三个新增管理页面的使用方式、配置和错误处理。
+本文说明管理页面的使用方式、配置和错误处理。
+
+## 匿名通道默认关闭
+
+**匿名通道可能已被上游重点封堵，优先使用 Zen API Key。** 配置和 WebUI 默认 `anonymous: false`；已有配置中明确设置的 `true` 保持不变，不会被自动关闭。示例的上游 Key 数组为空，启动前应先填入 Zen API Key（推荐）或 Go Key；已有的 Go 订阅连接也可满足上游凭证要求。不要为了检查代理而开启匿名推理。
+
+## 批量代理管理
+
+「Proxy 节点」页可批量导入内联代理、检查选中条目和暂存批量移除。代理文件 `proxyfile` 的条目在来源文件管理，不加入内联代理表格。移除不会立即修改运行时，仍需保存完整配置（`PUT /api/config`）；检查本身不删除任何条目。
+
+检查接口为 `POST /api/proxies/check`，需要管理 Session 与 `X-CSRF-Token`，请求体二选一：
+
+```json
+{"id":"SAVED_PROXY_ID"}
+```
+
+```json
+{"value":"https://proxy.example:8443"}
+```
+
+`id` 使用 `GET /api/config` 返回的已保存代理 ID；`value` 用于草稿地址。前端最多四个并发，服务端最多八个，超出立即拒绝、不排队；单次检查限时 20 秒。检查正常执行时返回 HTTP 200，包含 `ok`、`state`、`reason` 及可用时的 `status`、`latency_ms`；请求格式、认证、CSRF 和并发限制错误使用各自的 HTTP 错误状态。
+
+**只检查代理到配置的 Zen 上游的连通性，不验证推理、Key 或额度。** 独立 Bun 客户端仅通过选中代理向 `upstream.zen` 加 `/v1/models` 发送无认证 GET，不带任何 Zen/Go Key、`public` 或 OAuth 凭证，不发推理、不跟随重定向、不走 WARP，也不改变正式代理健康、Key 冷却或绑定。匿名关闭时仍可检查，不会私自启用匿名推理。
+
+| `state` | 含义与清理建议 |
+| ------- | -------------- |
+| `available` | 上游返回 200–399 或 401。401 的 `authentication_required` 表示已到站、需要认证，不代表验证了 Key。 |
+| `unavailable` | 仅本次可确认的代理端拒绝连接、DNS 失败（`proxy_unreachable`）或代理 407（`proxy_authentication_required`），可加入不可用筛选，不代表永久故障。 |
+| `limited` | 上游返回 429，不等于代理损坏。 |
+| `rejected` | 上游返回 403 等错误，不等于代理损坏。 |
+| `inconclusive` | 超时、其他不能定位的传输错误或检查前提不满足，不能确认代理损坏。 |
+
+只允许将 `unavailable` 作为本次确认不可用的清理筛选；不要把 `limited`、`rejected` 或 `inconclusive` 一并选为损坏代理。正式推理仍可能因模型、凭证、额度或上游策略失败。
 
 ## 模型与额度
 
 管理页面 `/#model-quotas`，登录后读取 `GET /api/model-quotas`。
 
 - 模型来自网关同步的 OpenCode Go 目录，支持搜索和复制模型 ID。
-- 额度由网关使用已配置的 Go Key 查询 `https://opencode.ai/zen/go/v1/usage`。浏览器不会收到上游 Key。
+- 手动 Go Key 的额度由网关查询 `https://opencode.ai/zen/go/v1/usage`。浏览器不会收到上游 Key；OAuth 订阅账户的额度当前不可查询，显示未知，不复用其他 Key 的数据。
 - 显示 5 小时、每周、每月窗口的剩余百分比和重置时间。接口只提供共享套餐窗口，不提供独立的逐模型余额，不推算金额或可用次数。多个 Key 的额度不相加。
 - 成功响应缓存 60 秒，失败缓存 15 秒；失败时保留上次成功结果并明确标记历史数据。没有成功数据时显示未知。
 - 页面打开期间每 60 秒查询一次；离开页面或隐藏浏览器时停止周期查询。手动刷新也受服务端缓存约束。
 
 依据：[OpenCode 官方额度接口源码](https://github.com/anomalyco/opencode/blob/dev/packages/console/app/src/routes/zen/go/v1/usage.ts)。该接口未列入正式 API 文档，若响应格式变化，会显示查询异常而非虚构额度。
+
+## Go 订阅登录（Device OAuth）
+
+在同一页面的「Go 订阅登录」卡片点击「浏览器登录 Go 订阅」。页面显示官方 OpenCode 验证链接和 `user_code`；自行打开链接、输入代码，并确认这是自己发起的授权。浏览器不自动跳转，也不要求粘贴 Token、读取本机凭证文件或提交回调 URL。WebUI 按服务端给出的间隔请求后端轮询，授权交换和凭证刷新均由后端完成。
+
+- 多个组织可选时，自动轮询暂停，选择订阅所在组织并点击「连接所选组织」。授权失败或过期可重新开始；「取消本次登录」只清除待完成的登录，不断开已保存的连接。
+- 离开页面或隐藏浏览器时停止自动轮询，返回页面后重新读取状态；未过期的待完成登录可继续。退出管理 Session 会取消该 Session 的待完成登录，但不删除已保存的订阅连接。
+- 成功连接后，配置与模型视图自动刷新。连接存于本地配置的 `go_subscription`，包含访问凭证及刷新凭证，后端按需自动刷新并持久化。配置及其备份包含敏感信息，应限制访问，不要上传或放入日志；WebUI 仅显示安全账户状态，不显示这些凭证。需重新登录时页面会提示，不把保留的连接误标为健康。
+- 「断开 Go 订阅登录」仅删除本地保存的连接，不撤销 OpenCode 官方会话。手动 `go_keys` 始终保留，但 OAuth 连接存在期间不作备用通道，包括授权失效或订阅路由不可用时；断开后恢复原有手动 Key 路由。
+- OAuth 只接入已确认的官方 Go 订阅路由，不自动改用余额或按量付费（PAYG）通道。OAuth 额度显示未知，不根据模型数量、成功响应或其他 Key 的共享窗口推算剩余量。
+
+管理接口均要求现有管理 Session，写操作还需 CSRF：`GET /api/go/auth` 读取安全状态，`POST /api/go/auth/start` 开始登录，`POST /api/go/auth/poll` 携带登录 `id`（选组织时另带 `organization_id`）检查或完成授权，`DELETE /api/go/auth` 取消待完成登录，`DELETE /api/go/connection` 移除本地连接。这些接口不向浏览器返回访问或刷新凭证。
+
+协议参考上游固定源码快照：[v2 `4617210822bdbb31e5749751afbfb4584ccedac8`](https://github.com/anomalyco/opencode/tree/4617210822bdbb31e5749751afbfb4584ccedac8)、[dev `7745079647b65036fe142e09ccd8623b25be1878`](https://github.com/anomalyco/opencode/tree/7745079647b65036fe142e09ccd8623b25be1878)。源码对比与本地模拟检查不代表真实订阅授权或真实推理已经验证；上游授权流程、组织权限及可用路由变化时，可能需要重新登录或更新实现。
 
 ## API Key 管理
 

@@ -55,7 +55,7 @@ go build -o opencode2api ./cmd/opencode2api
 Trước khi khởi động, hãy sửa `config.json`:
 
 1. Thay `server_keys` bằng API key cục bộ của bạn.
-2. Tùy chọn: thêm key Zen hoặc Go; ví dụ đã bật làn ẩn danh và để trống cả hai mảng key thượng nguồn.
+2. Điền Zen API Key (khuyến nghị) vào `zen_keys` hoặc Go key vào `go_keys` trước khi khởi động. Cấu hình mẫu tắt truy cập ẩn danh (`anonymous: false`) và để trống cả hai mảng key; một kết nối thuê bao Go đã lưu cũng đáp ứng yêu cầu này. Làn ẩn danh có thể bị chặn mạnh ở thượng nguồn, nên ưu tiên Zen API Key.
 3. Thay `webui.password`. File mẫu bật WebUI với tài khoản `admin`.
 
 ```bash
@@ -266,7 +266,7 @@ Việc chèn phụ thuộc giao thức: các message system và developer của 
 
 ### Định hình công cụ
 
-Trên mỗi request mô hình miễn phí đã được định hình, gateway đổi tên từng công cụ có tên của client thành `clint_<name>` — ký tự ngoài `A-Za-z0-9_-` thành `_`, tên tối đa 64 byte, trùng tên thì thêm hậu tố `_2`, `_3`, … — rồi thêm toàn bộ bộ công cụ chính thức của làn: định nghĩa 1.x (`bash`, `edit`, `glob`, `grep`, `read`, `skill`, `task`, `todowrite`, `webfetch`, `websearch`, `write`) trên `/zen`, và bộ 13 công cụ 2.x trên `/inference` và `/zen/go`. Request không có `tools`, có mảng rỗng, hoặc dùng mảng `functions` kiểu cũ cũng nhận bộ chính thức; `tool_choice`, `function_call` kiểu cũ và lịch sử tool call được viết lại tương ứng. Công cụ tích hợp của Responses và công cụ máy chủ của Anthropic được giữ nguyên.
+Trên mỗi request mô hình miễn phí đã được định hình, gateway đổi tên từng công cụ có tên của client thành một tên không lộ nội dung: tiền tố namespace cộng 12 ký tự hex đầu của mã SHA-256 tính trên tên công cụ — ký tự ngoài `A-Za-z0-9_-` thành `_`, tên tối đa 64 byte, trùng tên thì thêm hậu tố `_2`, `_3`, … — rồi thêm toàn bộ bộ công cụ chính thức của làn: định nghĩa 1.x (`bash`, `edit`, `glob`, `grep`, `read`, `skill`, `task`, `todowrite`, `webfetch`, `websearch`, `write`) trên `/zen`, và bộ 13 công cụ 2.x trên `/inference` và `/zen/go`. Request không có `tools`, có mảng rỗng, hoặc dùng mảng `functions` kiểu cũ cũng nhận bộ chính thức; `tool_choice`, `function_call` kiểu cũ và lịch sử tool call được viết lại tương ứng. Công cụ tích hợp của Responses và công cụ máy chủ của Anthropic được giữ nguyên.
 
 Phản hồi được khôi phục về tên client đã khai báo, cho cả luồng và không luồng, kể cả tên công cụ Chat bị chia qua nhiều chunk. Nếu upstream gọi một công cụ chính thức mà client chưa khai báo, tên đó được truyền nguyên: gateway không phát lại hay che các lời gọi công cụ chính thức.
 

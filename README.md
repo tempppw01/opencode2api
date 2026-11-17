@@ -11,7 +11,7 @@ The executable includes the WebUI. Running the service requires no Node.js runti
 - JSON and SSE responses across all three inference protocols.
 - Text, images, reasoning, function tools, tool calls, and tool results; file content where the target protocol can represent it.
 - Separate Zen and Go key pools, configurable tier preference, retries, and session affinity.
-- Optional anonymous Zen access with the OpenCode `public` credential.
+- Opt-in anonymous Zen access with the OpenCode `public` credential; disabled by default because upstream blocking can make it unavailable.
 - Optional userspace Cloudflare WARP egress for free-model traffic, without TUN or root.
 - Direct, HTTP, HTTPS, SOCKS5, and SOCKS5H connections, including a proxy file.
 - Dynamic model discovery, native protocol metadata, and disk caches.
@@ -53,8 +53,10 @@ go build -o opencode2api ./cmd/opencode2api
 Before starting, edit `config.json`:
 
 1. Replace `server_keys` with your own local API key.
-2. Optionally supply Zen or Go keys. The example enables the anonymous free lane and leaves both upstream key arrays empty.
+2. Supply a Zen API Key in `zen_keys` (recommended), or a Go key in `go_keys`. The example leaves both arrays empty and disables anonymous access, so configure an upstream credential before starting. An existing Go subscription connection also satisfies this requirement.
 3. Replace `webui.password`. The example enables the WebUI with username `admin`.
+
+**Anonymous traffic may be heavily blocked upstream. Prefer a Zen API Key.** Anonymous access is off by default in the configuration and WebUI; existing configurations that explicitly set `anonymous: true` keep that choice. Enable it deliberately only if you accept that free requests may still fail.
 
 ```bash
 ./opencode2api -config config.json
@@ -192,6 +194,8 @@ System One pairs a free-form state with typed questions and returns typed answer
 
 Requests using the upstream's native protocol retain provider-specific fields. Requests crossing protocols pass through a common representation; not every option has an equivalent. For example, Chat JSON output constraints and `seed` are not forwarded to Anthropic Messages. Unsupported content or tool types may be rejected.
 
+When converting Responses history, adjacent assistant reasoning, text, and function-call items form one assistant turn, including text interleaved between function calls. Tool results and user messages separate turns; missing or unmatched tool results remain validation errors when converting to Chat Completions.
+
 The gateway exposes the routes listed above. It does not implement embeddings, file uploads, image generation, or Responses retrieval and cancellation. It does not store conversation history; clients must supply the history or use features supported by the actual upstream.
 
 ## Routing and models
@@ -221,6 +225,8 @@ Each `/v1/models` entry also carries `cost` (USD per million tokens: `input`, `o
 
 ### Anonymous access and fallback
 
+**Anonymous traffic may be heavily blocked upstream. Prefer a Zen API Key.** The built-in default and example configuration set `anonymous: false`; the WebUI does not opt you in automatically or change an existing explicit `true` value.
+
 With `anonymous: true`, either condition makes a model eligible for the anonymous Zen lane:
 
 - Its ID contains `free`, case-insensitively.
@@ -236,13 +242,17 @@ The routing sequence is:
 
 Anonymous attempts are not cut short by `retry.max_attempts`, but all attempts share the request timeout. Network errors, authentication failures, rate limits, and server errors can rotate exits. A request-level `400`/`413`/`422` (for example `context_length_exceeded`) ends the request immediately: another exit or tier cannot change the request. An IP-level abuse `403` blocks only that exit; if every exit is blocked, the gateway stops walking them, and an authenticated Go key can still serve the request.
 
+If a retry fails before producing an HTTP response, the gateway retains the latest upstream HTTP error instead of replacing it with a transport error. Its status and `Retry-After` are preserved, and up to 64 KiB of its body is retained for the existing error-message conversion. The previous response connection or WARP lease is released before another attempt. A later HTTP response replaces the earlier one, and a client cancellation still takes precedence. This does not change session IDs, retry budgets, or upstream quotas.
+
 When the free tier is blocked for the whole deployment (an IP-level `403` abuse response), retrying only extends the penalty, so an optional lane-level circuit breaker can stop the probing. With `models.anonymous_backoff` configured, `threshold` consecutive failed anonymous attempts or an all-exits IP block pause the whole anonymous lane for `base_hours`, doubling on every further trip up to `max_hours`. A single non-abuse `403` or `429` does not open the breaker; it counts toward the threshold. While paused, requests skip the lane entirely: no proxy is drawn, no upstream request is made, and routing goes straight to the authenticated tiers. Catalog refreshes and availability probes honour the pause as well. When the window expires one request wins the half-open probe; success closes the breaker and restores the free lane, failure opens the next, longer window. The block is absent, and so the breaker stays off, by default.
 
 Requests are encoded for each tier's own protocol. With `performance.first_event_timeout_seconds` enabled, a successful SSE response is held until the first complete data event. A timeout or disconnect before that event uses the existing key/proxy retry budget; comments do not satisfy the timeout. Once released downstream, the stream is never replayed. The default is `0` (disabled); try `15` seconds for upstreams that accept requests but send no events. This bounds the first event, not the first text token, and does not apply to System One. Rotation aliases use their separate `rotation.first_output_seconds` timeout. A recognized stale Responses reasoning reference can trigger one repair pass; selected-key diagnostics never use that replay.
 
+Known OpenCode title requests are identified before prompt and message shaping, so those mutations cannot accidentally add agent tools to a title request or classify an ordinary agent request as a title request. The existing title-pattern and history restrictions still apply; this is not a general fix for every `FreeUsageLimitError`.
+
 When only anonymous access is configured, `/v1/models` exposes only models eligible for that lane.
 
-Free models never need a Zen key: with `anonymous: true` they are served by the public lane, and a configured key is only their fallback. To keep keys but expose free models only, set `models.free_only: true`. Paid models then disappear from `/v1/models`, direct requests for them are rejected, and rotation aliases keep only free members; free models may still fall back to the configured keys.
+An eligible free model can be attempted without a Zen key only when anonymous access is explicitly enabled; eligibility does not guarantee upstream access. To keep authenticated keys but expose free models only, set `models.free_only: true`. Paid models then disappear from `/v1/models`, direct requests for them are rejected, and rotation aliases keep only free members; free models use the configured keys when anonymous access is off, or may fall back to them when it is on.
 
 ### WARP egress for free models
 
@@ -258,13 +268,34 @@ The upstream free quota is scoped to the egress block, so rotation only helps wh
 
 Every shaped free-model request carries the OpenCode CLI's own system prompt — its base instructions, the `<env>` block, and the built-in skill listing — because the free tier validates agent-shaped traffic. The v1 `/zen` lane uses the 1.x tool names; `/inference` and `/zen/go` use the 2.x names. The environment block names the requested model, the gateway's working directory, the platform, and a UTC date.
 
+For remote clients, optionally set `upstream.prompt_environment` to replace the injected environment values without removing fields, changing their order, or modifying the official base prompt:
+
+```json
+{
+  "upstream": {
+    "prompt_environment": {
+      "working_directory": "/workspace",
+      "workspace_root": "/workspace",
+      "platform": "linux",
+      "is_git_repo": true
+    }
+  }
+}
+```
+
+This is a configuration fragment to merge into the existing `upstream` object, not a complete configuration. An absent or empty object preserves the previous host-based behavior. A nonempty `working_directory` also supplies the workspace root unless `workspace_root` is set separately; omitted values otherwise keep their existing defaults, including `is_git_repo: true`. Supported platforms are `linux`, `darwin`, and `win32` (`windows` is normalized to `win32`). An explicit platform also selects the corresponding shell-tool description; the gateway does not execute or translate client commands. Paths are used as text, not resolved or accessed, and control characters, line separators, and angle brackets are rejected. These are operator-supplied compatibility values, not automatically detected client facts: use separate gateway configurations when clients require different environments. The requested model and UTC date remain unchanged. Arbitrary overrides, including the macOS description, have not been verified against upstream validation.
+
 Injection is protocol-aware: Chat system and developer messages are folded into one leading `system` message, Anthropic receives a `system` value (a string, or a leading text block when the caller sent blocks), and Responses receives `instructions`. A body whose system content already contains the marker `You are opencode, an interactive CLI tool` is passed through, so a client that sends the official prompt never gets a second copy. Free models served by a Zen or Go key receive the same shaping even though they still leave through that tier's proxy.
+
+The override applies only to the gateway-injected block; a client's existing official prompt is left untouched. It is shared by anonymous, keyed, WARP, and probe shaping, and is preserved when saving other settings through the WebUI. Edit the JSON configuration and reload it to change these advanced values; no dedicated WebUI fields are provided.
 
 ### Tool shaping
 
-On every shaped free-model request the gateway replaces each named client tool with an opaque wire name, `clint_` plus the first 12 hex characters of the client name's SHA-256 (collisions get a `_2`, `_3`, … suffix), and appends the complete official tool set for the lane: the 1.x definitions (`bash`, `edit`, `glob`, `grep`, `read`, `skill`, `task`, `todowrite`, `webfetch`, `websearch`, `write`) on `/zen`, and the 13-tool 2.x set on `/inference` and `/zen/go`. The digest is not cosmetic: the free tier refuses a shaped body that still carries another client's vocabulary — a Claude Code request that declares both `ReportFindings` and `ScheduleWakeup` is answered with `FreeUsageLimitError`, and removing either name lifts the refusal — so no client tool name reaches the wire. Requests without a `tools` array, with an empty one, or with a legacy `functions` array get the same official set; `tool_choice`, legacy `function_call`, and the tool-call history are rewritten to match. Responses built-in tools and Anthropic server tools are left untouched.
+On every shaped free-model request the gateway replaces each named client tool with an opaque wire name — a namespace prefix plus the first 12 hex characters of the client name's SHA-256 (collisions get a `_2`, `_3`, … suffix) — and appends the complete official tool set for the lane: the 1.x definitions (`bash`, `edit`, `glob`, `grep`, `read`, `skill`, `task`, `todowrite`, `webfetch`, `websearch`, `write`) on `/zen`, and the 13-tool 2.x set on `/inference` and `/zen/go`. The prefix must stay a plain namespace a tool name could carry: the free tier refuses a prefix it has learned to recognise, so it must not become a gateway marker. The digest is not cosmetic: the free tier refuses a shaped body that still carries another client's vocabulary — a Claude Code request that declares both `ReportFindings` and `ScheduleWakeup` is answered with `FreeUsageLimitError`, and removing either name lifts the refusal — so no client tool name reaches the wire. Requests without a `tools` array, with an empty one, or with a legacy `functions` array get the same official set; `tool_choice`, legacy `function_call`, and the tool-call history are rewritten to match. Responses built-in tools and Anthropic server tools are left untouched.
 
 Responses are restored to client-declared names in streaming and non-streaming replies, including Chat tool names split across chunks. An official name is mapped when the client declared an equivalent tool; otherwise it remains unchanged in the response. In request history, unknown tool calls and official calls without a declared equivalent are removed with their paired results, and a named `tool_choice` targeting one of those dropped calls is removed too.
+
+Legacy `functions` definitions pass through the same single renaming step as modern tools, keeping definitions, named choices, history references, and response restoration consistent.
 
 ### Free model availability
 
@@ -292,7 +323,7 @@ Cooldowns grow exponentially up to eight times `performance.failure_cooldown_sec
 
 ## Configuration reference
 
-See [config.example.json](config.example.json) for a complete starting configuration. JSON supports `//` and `/* ... */` comments; unknown fields and invalid values are rejected.
+See [config.example.json](config.example.json) for a starting configuration; add an upstream credential before starting. The configuration-file loader supports `//` and `/* ... */` comments, which are not part of standard JSON; management API bodies must be standard JSON. Unknown fields, including `_comment`, and invalid values are rejected.
 
 ### Keys, listeners, and routing
 
@@ -300,8 +331,8 @@ See [config.example.json](config.example.json) for a complete starting configura
 | --------------------------- | --------------------------------------------------------------------------- |
 | `listen`                    | `127.0.0.1:8080`.                                                           |
 | `server_keys`               | At least one local key is required.                                         |
-| `zen_keys`, `go_keys`       | At least one upstream key is required unless anonymous access is enabled.   |
-| `anonymous`                 | `false`.                                                                    |
+| `zen_keys`, `go_keys`       | At least one upstream key or saved `go_subscription` connection is required unless anonymous access is explicitly enabled. |
+| `anonymous`                 | `false`; opt-in only. Upstream blocking may make this lane unavailable; prefer a Zen API Key. |
 | `warp.enabled`              | `false`; free-lane traffic leaves through Cloudflare WARP and no proxy.    |
 | `warp.pool_size`            | `2`; upper bound on WARP exits (half pre-registered in the background; the active ring follows concurrency), 1–32. |
 | `warp.stack`                | `ipv6`; `ipv6`, `ipv4`, or `dual`.                                          |
@@ -438,6 +469,7 @@ The management listener serves the UI and `/api/*` routes. Authentication uses o
 | `GET /api/monitor`                               | Request, token, upstream, and resource statistics.                    |
 | `GET /api/debug/models`                          | Model routes, key fingerprints, and metadata diagnostics.             |
 | `POST /api/debug/inference`                      | Run a Playground request.                                             |
+| `POST /api/proxies/check`                        | Check one saved or draft proxy's connectivity to the configured Zen upstream. |
 | `GET /api/logs`, `GET /api/logs/stream`          | Recent logs or a live SSE subscription.                               |
 
 Playground requests require a session and `X-CSRF-Token` and are limited to 12 per minute per client IP:
@@ -458,6 +490,44 @@ The server forces `stream: false`. Use `{"mode":"selected","tier":"zen","id":"KE
 **Both automatic and selected diagnostics preserve production key cooldowns, failure counts, proxy health, and bindings.** They still make real upstream requests, can consume provider quota, and appear in monitoring.
 
 After execution, the management endpoint returns HTTP 200 with the actual result in `ok`, `http_status`, `request_id`, `route`, and `response`. Selected-key results also include `selected_key` and `key_test`: `usable`, `rejected`, `rate_limited`, `transport_error`, `upstream_error`, `request_error`, or `unavailable`. Invalid management input, authentication, CSRF, and throttling retain their own HTTP error statuses.
+
+### Bulk proxy management
+
+The WebUI can import multiple inline proxies, check selected entries, and stage selected entries for removal. Checks call `POST /api/proxies/check` once per proxy, with a login session, `X-CSRF-Token`, and exactly one of these standard JSON bodies:
+
+```json
+{"id":"SAVED_PROXY_ID"}
+```
+
+```json
+{"value":"https://proxy.example:8443"}
+```
+
+Use the masked entry ID from `GET /api/config` for an existing proxy, or `value` for an unsaved draft. Results return HTTP 200 with `ok`, `state`, and `reason`; `latency_ms` and upstream `status` may also be present. Invalid management requests, authentication, CSRF, and concurrency limits use their own HTTP error statuses. Each check has a 20-second timeout. The WebUI runs at most four checks concurrently; the server accepts at most eight and rejects excess checks without queuing.
+
+**This checks only proxy-to-Zen connectivity, not inference, key validity, or quota.** It sends an unauthenticated `GET` to the configured `upstream.zen` URL plus `/v1/models` through an isolated Bun client using only the selected proxy. No Zen/Go key, anonymous `public` credential, or OAuth token is sent, no inference is performed, redirects are not followed, and WARP is not used. It works with `anonymous: false` without enabling anonymous access.
+
+| `state` | Meaning / cleanup guidance |
+| ------- | -------------------------- |
+| `available` | The upstream responded with HTTP 200–399 or 401. A 401 means the endpoint was reached but requires authentication (`authentication_required`), not that a key was validated. |
+| `unavailable` | A confirmed proxy-side connection refusal or DNS failure (`proxy_unreachable`), or proxy CONNECT HTTP 407 (`proxy_authentication_required`); eligible for unavailable-only selection for this check, not proof of permanent failure. |
+| `limited` | The upstream returned 429; this is not evidence that the proxy is broken. |
+| `rejected` | The upstream responded with 403 or another error status, excluding 401 and 429 (`upstream_responded`), or the proxy rejected the tunnel (`proxy_tunnel_rejected`); this is not evidence that the proxy is broken. An origin HTTP 407 is not classified as proxy authentication failure. |
+| `inconclusive` | A timeout, other transport failure, or unavailable check prerequisite; do not treat this as a confirmed broken proxy. |
+
+Checks do not change production proxy health, key cooldowns, or bindings. A result describes this connection attempt, not permanent proxy health; upstream rejection, rate limiting, and timeouts must not be selected for cleanup as confirmed proxy failures.
+
+Removal is staged in the WebUI and takes effect only after saving the full configuration through `PUT /api/config`; checking does not delete anything. Proxies supplied by `proxyfile` are managed in that source file, not in the inline-proxy table.
+
+### Go subscription sign-in
+
+In **Models & Quota** (`/#model-quotas`), select **Sign in to Go in your browser**, open the displayed official OpenCode Device OAuth link, and enter the displayed `user_code`. Authorize the request you initiated; the WebUI schedules backend polling to complete sign-in. No token pasting, local credential-file import, or callback URL submission is required. If the account has multiple organizations, select the organization with the Go subscription in the WebUI.
+
+- The backend refreshes access credentials when needed and persists the connection in the local configuration (`go_subscription`). This includes access and refresh secrets: protect the configuration and its backups. These credentials are not sent to the WebUI.
+- **Disconnect** removes the gateway's saved connection, not the official OpenCode session. Manually configured `go_keys` are retained but are not fallback routes while OAuth is connected; disconnecting restores their existing routing. If sign-in becomes invalid, reconnect rather than relying on those keys as a fallback.
+- OAuth uses only confirmed official Go subscription routes, never a pay-as-you-go route as fallback. OAuth quota is currently shown as **unknown**; the gateway does not infer remaining allowance from models or request results. The existing usage endpoint remains available for manually configured Go keys.
+
+The implementation follows the upstream source snapshots [v2 `4617210822bdbb31e5749751afbfb4584ccedac8`](https://github.com/anomalyco/opencode/tree/4617210822bdbb31e5749751afbfb4584ccedac8) and [dev `7745079647b65036fe142e09ccd8623b25be1878`](https://github.com/anomalyco/opencode/tree/7745079647b65036fe142e09ccd8623b25be1878). Source compatibility and local checks are not a claim of live subscription validation; upstream authorization and routing can change. See the [management guide](docs/management.zh-CN.md) for lifecycle and management endpoints.
 
 ### Interface language
 

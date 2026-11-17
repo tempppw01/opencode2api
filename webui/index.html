@@ -650,6 +650,22 @@
               <section class="section">
                 <div class="section-head">
                   <div>
+                    <h2 class="section-title" data-i18n="goAuth.title">Go 订阅登录</h2>
+                    <p class="section-caption" data-i18n="goAuth.caption">通过 OpenCode 官方页面授权，无需复制凭证。手动 Go Key 仍保留，订阅连接期间不作备用通道，断开后恢复原有路由。</p>
+                  </div>
+                  <button id="go-auth-refresh" type="button" class="btn btn-sm" data-i18n="goAuth.refresh">刷新登录状态</button>
+                </div>
+                <div id="go-auth-content" class="stack" role="status" aria-live="polite"></div>
+                <div class="key-actions">
+                  <button id="go-auth-start" type="button" class="btn btn-sm btn-primary" data-i18n="goAuth.start">浏览器登录 Go 订阅</button>
+                  <button id="go-auth-cancel" type="button" class="btn btn-sm hidden" data-i18n="goAuth.cancel">取消本次登录</button>
+                  <button id="go-auth-disconnect" type="button" class="btn btn-sm btn-danger hidden" data-i18n="goAuth.disconnect">断开 Go 订阅登录</button>
+                </div>
+                <p class="section-caption" data-i18n="goAuth.notice">只接入已确认的 Go 订阅路由，不自动改用余额通道。OAuth 订阅额度查询不可用时显示未知，不推算剩余额度。</p>
+              </section>
+              <section class="section">
+                <div class="section-head">
+                  <div>
                     <h2 class="section-title" data-i18n="quotas.title">OpenCode Go 套餐额度</h2>
                     <p class="section-caption" data-i18n="quotas.caption">所有模型共享套餐窗口，百分比由上游取整。</p>
                   </div>
@@ -861,6 +877,7 @@
                         <input id="c-anonymous" type="checkbox" />
                         <span data-i18n="config.secrets.anonymous">启用 Zen 匿名通道</span>
                       </label>
+                      <p class="config-warning" data-i18n="config.secrets.anonymousWarning">匿名通道默认关闭，可能已被上游重点封堵。建议优先配置 Zen API Key；启用匿名不保证可用，也不会自动修改当前设置。</p>
                     </div>
                     <div class="field full">
                       <label for="server_keys-new">Server Keys</label>
@@ -898,45 +915,48 @@
                   <div class="section-head">
                     <div>
                       <h2 class="section-title" data-i18n="config.proxy.title">Proxy 节点</h2>
-                      <p class="section-caption" data-i18n="config.proxy.caption">通过配置的上游渠道逐个请求模型目录，可能触发上游限流或消耗出口 IP 额度。</p>
                     </div>
                   </div>
-                  <div class="proxy-tools">
-                    <div class="proxy-tool-actions">
-                      <button id="proxy-probe" class="btn btn-sm btn-primary" type="button" data-i18n="config.proxy.probe">一键测活</button>
-                      <label for="proxy-probe-channel" data-i18n="config.proxy.probeChannel">测活渠道</label>
-                      <select id="proxy-probe-channel">
-                        <option value="auto" data-i18n="config.proxy.channel.auto">Anonymous → Zen → Go fallback</option>
-                        <option value="anonymous" data-i18n="config.proxy.channel.anonymous">Anonymous</option>
-                        <option value="zen" data-i18n="config.proxy.channel.zen">Zen Key</option>
-                        <option value="go" data-i18n="config.proxy.channel.go">Go Key</option>
-                      </select>
-                      <label class="check"><input id="proxy-select-all" type="checkbox" disabled /><span data-i18n="config.proxy.selectAll">全选检测结果</span></label>
-                      <label class="check"><input id="proxy-select-timeout" type="checkbox" disabled /><span data-i18n="config.proxy.selectTimeout">超时</span></label>
-                      <span class="proxy-status-filters-label" data-i18n="config.proxy.selectStatus">状态码</span>
-                      <div id="proxy-status-filters" class="proxy-status-filters" aria-label="HTTP status filters"></div>
-                      <button id="proxy-delete" class="btn btn-sm btn-danger" type="button" disabled data-i18n="config.proxy.deleteSelected">删除所选</button>
-                      <button id="proxy-keep-200" class="btn btn-sm" type="button" disabled data-i18n="config.proxy.keep200">仅保留 HTTP 200</button>
-                    </div>
-                    <div id="proxy-probe-summary" class="proxy-probe-summary" role="status"></div>
-                    <div class="table-wrap">
-                      <table class="table proxy-probe-table">
-                        <thead><tr><th></th><th data-i18n="config.proxy.col.node">节点</th><th data-i18n="config.proxy.col.channel">渠道</th><th data-i18n="config.proxy.col.model">模型</th><th data-i18n="config.proxy.col.status">状态码</th><th data-i18n="config.proxy.col.latency">耗时</th><th data-i18n="config.proxy.col.result">检测结果</th></tr></thead>
-                        <tbody id="proxy-probe-results"><tr><td class="empty" colspan="7" data-i18n="config.proxy.probeEmpty">运行测活后显示结果</td></tr></tbody>
-                      </table>
-                    </div>
+                  <p class="config-warning" data-i18n="config.proxy.warning">仅检查指定代理到 Zen 的无认证连通性，不发模型推理、不验证额度、不使用上游 Key，也不依赖匿名通道开关。401 表示已到达上游且需认证；上游拒绝或限流不代表代理永久损坏，只有确认代理故障才会进入「选中确认故障」。</p>
+                  <p class="section-caption" data-i18n="config.proxy.scope">检查与移除仅管理下列内联代理和新增草稿；proxyfile 条目请在文件中管理。移除需保存后生效，绑定验证失败时不会自动删除绑定。</p>
+                  <div class="proxy-actions">
+                    <button id="proxies-check-filtered" type="button" class="btn btn-sm" data-i18n="config.proxy.checkFiltered">检查筛选结果</button>
+                    <button id="proxies-check-selected" type="button" class="btn btn-sm" data-i18n="config.proxy.checkSelected">检查所选</button>
+                    <button id="proxies-stop" type="button" class="btn btn-sm hidden" data-i18n="config.proxy.stop">停止检查</button>
+                    <button id="proxies-select-filtered" type="button" class="btn btn-sm btn-ghost" data-i18n="config.proxy.selectFiltered">全选筛选结果</button>
+                    <button id="proxies-select-unavailable" type="button" class="btn btn-sm btn-ghost" data-i18n="config.proxy.selectUnavailable">选中确认故障</button>
+                    <button id="proxies-clear-selection" type="button" class="btn btn-sm btn-ghost" data-i18n="config.proxy.clearSelection">取消选择</button>
+                    <button id="proxies-delete-selected" type="button" class="btn btn-sm btn-danger" data-i18n="config.proxy.deleteSelected">移除所选代理</button>
                   </div>
-                  <div id="proxies-chips" class="chips"></div>
-                  <div class="proxy-import-actions">
-                    <button id="proxy-clear-configured" class="btn btn-sm btn-danger" type="button" data-i18n="config.proxy.clearConfigured">清空 WebUI 代理</button>
+                  <div class="field proxy-search">
+                    <label for="proxies-search" data-i18n="config.proxy.search">搜索代理地址（不搜索认证信息）</label>
+                    <input id="proxies-search" type="search" autocomplete="off" />
+                  </div>
+                  <p id="proxies-summary" class="section-caption" role="status" aria-live="polite"></p>
+                  <p id="proxies-progress" class="section-caption" role="status" aria-live="polite"></p>
+                  <div class="table-wrap proxy-table-wrap">
+                    <table id="proxies-table" class="table proxy-table">
+                      <thead>
+                        <tr>
+                          <th><label class="proxy-page-select"><input id="proxies-select-page" type="checkbox" /><span data-i18n="config.proxy.selectPage">本页</span></label></th>
+                          <th data-i18n="config.proxy.address">代理地址</th>
+                          <th data-i18n="config.proxy.result">检查结果</th>
+                          <th data-i18n="config.proxy.response">上游响应</th>
+                          <th data-i18n="config.proxy.latency">耗时</th>
+                          <th data-i18n="config.proxy.actions">操作</th>
+                        </tr>
+                      </thead>
+                      <tbody id="proxies-rows"></tbody>
+                    </table>
+                  </div>
+                  <div class="proxy-pager">
+                    <button id="proxies-prev" type="button" class="btn btn-sm" data-i18n="diag.pager.prev">上一页</button>
+                    <span id="proxies-page" class="section-caption"></span>
+                    <button id="proxies-next" type="button" class="btn btn-sm" data-i18n="diag.pager.next">下一页</button>
                   </div>
                   <div class="form-grid">
                     <div class="field">
                       <label for="proxies-new" data-i18n="config.proxy.add">新增 Proxy（每行一个）</label>
-                      <div class="proxy-import-actions">
-                        <button id="proxy-import" class="btn btn-sm" type="button" data-i18n="config.proxy.import">导入 TXT 并合并</button>
-                        <input id="proxy-import-file" type="file" accept=".txt,text/plain" hidden />
-                      </div>
                       <textarea
                         id="proxies-new"
                         placeholder="direct&#10;http://user:pass@host:port&#10;http://127.0.0.1:7890#pool"
