@@ -24,8 +24,6 @@ import (
 type probeResult struct {
 	success, attempted, effortRejected bool
 	reason, channel                    string
-	detail                             string
-	status                             int
 	effort                             models.EffortProbe
 }
 
@@ -248,7 +246,6 @@ func (g *Gateway) probeAttempt(parent context.Context, client *http.Client, base
 	}
 	if err != nil {
 		result.reason = "transport_error"
-		result.detail = err.Error()
 		if overWARP && errors.Is(err, errWARPUnavailable) {
 			// No exit could be acquired, so no request reached the upstream.
 			result.attempted = false
@@ -257,12 +254,10 @@ func (g *Gateway) probeAttempt(parent context.Context, client *http.Client, base
 		}
 		if ctx.Err() != nil {
 			result.reason = "probe_timeout"
-			result.detail = ctx.Err().Error()
 		}
 		return result
 	}
 	defer resp.Body.Close()
-	result.status = resp.StatusCode
 	if resp.StatusCode/100 != 2 {
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		result.reason = fmt.Sprintf("http_%d", resp.StatusCode)
@@ -271,11 +266,8 @@ func (g *Gateway) probeAttempt(parent context.Context, client *http.Client, base
 			// its own reason so operators see it in the WebUI instead of
 			// reading another anonymous "http_403".
 			if isNetworkAbuseBlock(resp.StatusCode, body) {
-				result.reason = "network_abuse_blocked"
-				result.detail = strings.TrimSpace(string(body))
-				return result
+				return probeResult{attempted: true, reason: "network_abuse_blocked"}
 			}
-			result.detail = strings.TrimSpace(string(body))
 			result.effortRejected = isEffortRejection(resp.StatusCode, string(body))
 			if IsModelUnavailable(resp.StatusCode, string(body)) {
 				result.reason = "model_unavailable"
@@ -318,9 +310,13 @@ func (g *Gateway) probeAttempt(parent context.Context, client *http.Client, base
 	if !result.success {
 		result.reason = "invalid_or_incomplete_response"
 		if err != nil {
-			result.detail = err.Error()
-			result.effortRejected = isEffortRejection(400, err.Error())
-			if IsModelUnavailable(400, err.Error()) {
+			message := err.Error()
+			var failure *wire.StreamFailure
+			if errors.As(err, &failure) {
+				message = failure.Type + " " + failure.Message
+			}
+			result.effortRejected = isEffortRejection(400, message)
+			if IsModelUnavailable(400, message) {
 				result.reason = "model_unavailable"
 			}
 		}
